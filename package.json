@@ -1,11 +1,11 @@
 {
-  "name": "worktree",
+  "name": "workgraph",
   "version": "0.0.1",
-  "description": "Workspace dependency analyzer and parallel build orchestrator for monorepos",
+  "description": "Lightweight workspace dependency graph and parallel build orchestrator for monorepos",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "worktree": "dist/cli.js"
+    "workgraph": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",

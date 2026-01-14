@@ -1,4 +1,4 @@
-# worktree
+# workgraph
 
 Workspace dependency analyzer and parallel build orchestrator for npm/yarn/pnpm monorepos.
 
@@ -15,9 +15,9 @@ Workspace dependency analyzer and parallel build orchestrator for npm/yarn/pnpm 
 ## Installation
 
 ```bash
-npm install -g worktree
+npm install -g workgraph
 # or
-npm install -D worktree
+npm install -D workgraph
 ```
 
 ## CLI Usage
@@ -27,7 +27,7 @@ npm install -D worktree
 Show the dependency graph and detect cycles:
 
 ```bash
-worktree analyze
+workgraph analyze
 ```
 
 Output:
@@ -53,16 +53,16 @@ Show what would be built for specific changes:
 
 ```bash
 # By package name
-worktree plan -c @myorg/auth
+workgraph plan -c @myorg/auth
 
 # By shorthand name
-worktree plan -c auth
+workgraph plan -c auth
 
 # By path
-worktree plan -c libs/auth
+workgraph plan -c libs/auth
 
 # Multiple changes
-worktree plan -c auth -c utils
+workgraph plan -c auth -c utils
 ```
 
 Output:
@@ -84,16 +84,16 @@ Execute the build plan:
 
 ```bash
 # Build all
-worktree build
+workgraph build
 
 # Build affected by specific changes
-worktree build -c auth
+workgraph build -c auth
 
 # Dry run (show plan without executing)
-worktree build -c auth --dry-run
+workgraph build -c auth --dry-run
 
 # With custom concurrency
-worktree build -c auth --concurrency 2
+workgraph build -c auth --concurrency 2
 ```
 
 ### Watch Mode
@@ -102,22 +102,22 @@ Watch for file changes and automatically rebuild affected projects:
 
 ```bash
 # Watch all projects
-worktree watch
+workgraph watch
 
 # Watch all, but only rebuild libs (for dev with app servers)
-worktree watch --filter 'libs/*'
+workgraph watch --filter 'libs/*'
 
 # Watch libs + start app dev servers
-worktree watch --filter 'libs/*' api web
+workgraph watch --filter 'libs/*' api web
 
 # Dry run mode
-worktree watch --dry-run
+workgraph watch --dry-run
 ```
 
 **Dev workflow (single terminal):**
 ```bash
 # Watch libs + start API and web dev servers
-worktree watch --filter 'libs/*' api web
+workgraph watch --filter 'libs/*' api web
 ```
 
 Output:
@@ -155,7 +155,7 @@ import {
   planWaves,
   executePlan,
   createWatcher,
-} from 'worktree';
+} from 'workgraph';
 
 // Load workspace projects
 const projects = await loadWorkspaceProjects('/path/to/workspace');

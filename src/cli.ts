@@ -14,8 +14,8 @@ import { Project } from './types';
 const program = new Command();
 
 program
-  .name('worktree')
-  .description('Workspace dependency analyzer and parallel build orchestrator for monorepos')
+  .name('workgraph')
+  .description('Lightweight workspace dependency graph and parallel build orchestrator for monorepos')
   .version('0.0.1');
 
 program
