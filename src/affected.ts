@@ -1,5 +1,5 @@
 import { DependencyGraph, Project } from './types';
-import { getProjectFromPath, isRootConfig } from './workspace';
+import { getProjectFromPath } from './workspace';
 
 export function getAffectedProjects(
   changedProjects: Set<string>,
@@ -29,23 +29,17 @@ export function getChangedProjectsFromFiles(
   changedFiles: string[],
   projects: Map<string, Project>,
   root: string
-): { changedProjects: Set<string>; isGlobalChange: boolean } {
+): Set<string> {
   const changedProjects = new Set<string>();
-  let isGlobalChange = false;
 
   for (const file of changedFiles) {
-    if (isRootConfig(file, root)) {
-      isGlobalChange = true;
-      continue;
-    }
-
     const project = getProjectFromPath(file, projects, root);
     if (project) {
       changedProjects.add(project);
     }
   }
 
-  return { changedProjects, isGlobalChange };
+  return changedProjects;
 }
 
 export function resolveProjectNames(

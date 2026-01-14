@@ -87,21 +87,3 @@ export function getProjectFromPath(
   return longestMatch;
 }
 
-export function isRootConfig(filePath: string, root: string): boolean {
-  const absoluteFilePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(root, filePath);
-
-  const relativePath = path.relative(root, absoluteFilePath);
-
-  const rootConfigs = [
-    'package.json',
-    'package-lock.json',
-    'pnpm-lock.yaml',
-    'yarn.lock',
-    'tsconfig.json',
-    'tsconfig.base.json',
-  ];
-
-  return rootConfigs.includes(relativePath);
-}

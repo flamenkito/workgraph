@@ -9,12 +9,59 @@ import { getAffectedProjects, resolveProjectNames } from './affected';
 import { createBuildPlan, formatBuildPlan } from './planner';
 import { createWatcher, formatTimestamp } from './watcher';
 import { executePlan } from './executor';
-import { Project } from './types';
+import { Project, SourceConfig } from './types';
 import {
   scanForUnknownDependencies,
   formatUnknownDependencies,
   loadWorkgraphConfig,
 } from './source-scanner';
+
+function normalizeSourceConfig(config: string | SourceConfig): SourceConfig {
+  if (typeof config === 'string') {
+    return { command: config };
+  }
+  return config;
+}
+
+function shouldRunGenerator(
+  sourcePath: string,
+  sourceConfig: SourceConfig,
+  affectedProjects: Set<string>,
+  projects: Map<string, Project>,
+  root: string
+): boolean {
+  // Check if any dep project is affected
+  if (sourceConfig.deps && sourceConfig.deps.length > 0) {
+    for (const dep of sourceConfig.deps) {
+      // Try exact match first
+      if (affectedProjects.has(dep)) {
+        return true;
+      }
+      // Try matching by path or partial name
+      for (const projectName of affectedProjects) {
+        const project = projects.get(projectName);
+        if (!project) continue;
+        // Match by path (e.g., "apps/api" or "api")
+        if (project.path === dep || project.path.endsWith('/' + dep)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Fallback: check if source path is within any affected project
+  const sourceDir = path.resolve(root, sourcePath);
+  for (const projectName of affectedProjects) {
+    const project = projects.get(projectName);
+    if (!project) continue;
+    if (sourceDir.startsWith(project.absolutePath)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 async function runSourceGenerators(
   root: string,
@@ -26,60 +73,53 @@ async function runSourceGenerators(
   const sources = config.sources || {};
   const generated: string[] = [];
 
-  // Find which configured sources are needed by affected projects
-  for (const [sourcePath, command] of Object.entries(sources)) {
-    // Check if any affected project uses this source path
-    const sourceDir = path.resolve(root, sourcePath);
+  for (const [sourcePath, rawConfig] of Object.entries(sources)) {
+    const sourceConfig = normalizeSourceConfig(rawConfig);
 
-    for (const projectName of affectedProjects) {
-      const project = projects.get(projectName);
-      if (!project) continue;
+    if (!shouldRunGenerator(sourcePath, sourceConfig, affectedProjects, projects, root)) {
+      continue;
+    }
 
-      // Check if source path is within the project
-      if (sourceDir.startsWith(project.absolutePath)) {
-        console.log(`[${formatTimestamp()}] Generating: ${sourcePath}`);
+    console.log(`[${formatTimestamp()}] Generating: ${sourcePath}`);
 
-        if (dryRun) {
-          console.log(`[${formatTimestamp()}]   [dry-run] Would run: ${command}`);
-          generated.push(sourcePath);
-          continue;
-        }
+    if (dryRun) {
+      console.log(`[${formatTimestamp()}]   [dry-run] Would run: ${sourceConfig.command}`);
+      generated.push(sourcePath);
+      continue;
+    }
 
-        try {
-          const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
-            const proc = spawn(command, {
-              cwd: root,
-              shell: true,
-              stdio: 'pipe',
-            });
+    try {
+      const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
+        const proc = spawn(sourceConfig.command, {
+          cwd: root,
+          shell: true,
+          stdio: 'pipe',
+        });
 
-            let output = '';
-            proc.stdout?.on('data', (data) => (output += data));
-            proc.stderr?.on('data', (data) => (output += data));
+        let output = '';
+        proc.stdout?.on('data', (data) => (output += data));
+        proc.stderr?.on('data', (data) => (output += data));
 
-            proc.on('close', (code) => {
-              resolve({ success: code === 0, output });
-            });
+        proc.on('close', (code) => {
+          resolve({ success: code === 0, output });
+        });
 
-            proc.on('error', (err) => {
-              resolve({ success: false, output: err.message });
-            });
-          });
+        proc.on('error', (err) => {
+          resolve({ success: false, output: err.message });
+        });
+      });
 
-          if (result.success) {
-            console.log(`[${formatTimestamp()}]   Generated successfully`);
-            generated.push(sourcePath);
-          } else {
-            console.error(`[${formatTimestamp()}]   Generation FAILED`);
-            console.error(result.output);
-            return { success: false, generated };
-          }
-        } catch (error) {
-          console.error(`[${formatTimestamp()}]   Generation FAILED: ${(error as Error).message}`);
-          return { success: false, generated };
-        }
-        break; // Only generate once per source
+      if (result.success) {
+        console.log(`[${formatTimestamp()}]   Generated successfully`);
+        generated.push(sourcePath);
+      } else {
+        console.error(`[${formatTimestamp()}]   Generation FAILED`);
+        console.error(result.output);
+        return { success: false, generated };
       }
+    } catch (error) {
+      console.error(`[${formatTimestamp()}]   Generation FAILED: ${(error as Error).message}`);
+      return { success: false, generated };
     }
   }
 
@@ -143,7 +183,10 @@ program
 
       if (result.configuredSources.size > 0) {
         console.log('Configured sources:');
-        for (const [sourcePath, command] of result.configuredSources) {
+        const config = loadWorkgraphConfig(root);
+        for (const sourcePath of result.configuredSources) {
+          const sourceConfig = config.sources![sourcePath];
+          const command = typeof sourceConfig === 'string' ? sourceConfig : sourceConfig.command;
           console.log(`  ${sourcePath}`);
           console.log(`    -> ${command}`);
         }

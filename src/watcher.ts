@@ -1,6 +1,6 @@
 import * as chokidar from 'chokidar';
 import { WatcherOptions, Project } from './types';
-import { getProjectFromPath, isRootConfig } from './workspace';
+import { getProjectFromPath } from './workspace';
 
 const DEFAULT_IGNORE_PATTERNS = [
   '**/node_modules/**',
@@ -41,15 +41,8 @@ export function createWatcher(
 
     const changedProjects = new Set<string>();
     const filesByProject = new Map<string, string[]>();
-    let isGlobalChange = false;
 
     for (const file of filesToProcess) {
-      if (isRootConfig(file, root)) {
-        isGlobalChange = true;
-        if (verbose) console.log(`[watcher] Root config changed: ${file}`);
-        break;
-      }
-
       const project = getProjectFromPath(file, projects, root);
       if (project) {
         changedProjects.add(project);
@@ -73,10 +66,7 @@ export function createWatcher(
       }
     }
 
-    if (isGlobalChange) {
-      // All projects affected by root config change
-      onChange(new Set(projects.keys()));
-    } else if (changedProjects.size > 0) {
+    if (changedProjects.size > 0) {
       onChange(changedProjects);
     }
   };
