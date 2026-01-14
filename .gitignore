@@ -4,4 +4,6 @@ dist/
 .DS_Store
 .idea/
 .claude/
+
 package-lock.json
+workgraph-*.tgz
