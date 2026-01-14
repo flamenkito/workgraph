@@ -11,6 +11,7 @@ Workspace dependency analyzer and parallel build orchestrator for npm/yarn/pnpm 
 - **File Watching** - Monitors file changes with debouncing and triggers rebuilds
 - **Dev Server Management** - Start and manage multiple dev servers with prefixed output
 - **Concurrent Execution** - Executes builds with configurable concurrency limits
+- **Source Generation** - Automatically run code generators for missing/generated sources
 
 ## Installation
 
@@ -45,6 +46,45 @@ Dependency Graph:
     -> @myorg/api
 
 No cycles detected
+```
+
+### Scan for Unknown Dependencies
+
+Detect imports that can't be resolved (e.g., generated code folders):
+
+```bash
+workgraph scan
+```
+
+Output when missing dependencies are found:
+```
+Scanning workspace at: /path/to/workspace
+
+Scanning 5 projects for unknown dependencies...
+
+Unknown dependencies detected:
+
+  @myorg/web-angular:
+    - apps/web-angular/src/generated (in .gitignore)
+      Imported from: apps/web-angular/src/app/app.component.ts
+        (and 4 more files)
+
+To configure generated sources, add to your root package.json:
+
+  "workgraph": {
+    "sources": {
+      "apps/web-angular/src/generated": "<command to generate>"
+    }
+  }
+```
+
+Output when sources are configured:
+```
+Configured sources:
+  apps/web-angular/src/generated
+    -> npx exposify-codegen api -o ./apps/web-angular/src/generated
+
+No unknown dependencies found
 ```
 
 ### Plan Build
@@ -143,6 +183,54 @@ Press Ctrl+C to stop
 | `--debounce <ms>` | Debounce time for watch mode | `200` |
 | `--dry-run` | Show plan without executing | `false` |
 | `--filter <pattern>` | Only build projects matching pattern (e.g., `libs/*`) | - |
+
+## Source Generation
+
+Configure automatic source generation for generated code (e.g., client code from API schemas).
+
+### Configuration
+
+Add `workgraph.sources` to your root `package.json`:
+
+```json
+{
+  "workgraph": {
+    "sources": {
+      "apps/web-angular/src/generated": "npx exposify-codegen api -o ./apps/web-angular/src/generated"
+    }
+  }
+}
+```
+
+### How It Works
+
+1. When `build` or `watch` runs, workgraph checks if any affected project uses a configured source path
+2. If so, the source generation command runs **before** the build
+3. This ensures generated code is up-to-date before compilation
+
+### Example Output
+
+```
+$ workgraph build -c @myorg/api
+
+Affected: @myorg/api, @myorg/web-angular
+
+Build Plan:
+  Wave 1: @myorg/api
+  Wave 2: @myorg/web-angular
+
+Total: 2 projects in 2 waves
+
+[14:32:01] Generating: apps/web-angular/src/generated
+[14:32:03]   Generated successfully
+
+[14:32:03] Building: @myorg/api
+[14:32:05] @myorg/api: done (2188ms)
+[14:32:05] Building: @myorg/web-angular
+[14:32:08] @myorg/web-angular: done (2580ms)
+
+Build complete in 4770ms
+```
 
 ## Programmatic API
 

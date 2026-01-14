@@ -22,10 +22,13 @@ export function createWatcher(
 ): chokidar.FSWatcher {
   const {
     root,
-    ignorePatterns = DEFAULT_IGNORE_PATTERNS,
+    ignorePatterns = [],
     debounceMs = DEFAULT_DEBOUNCE_MS,
+    verbose = false,
     onChange,
   } = options;
+
+  const allIgnorePatterns = [...DEFAULT_IGNORE_PATTERNS, ...ignorePatterns];
 
   let changedFiles: string[] = [];
   let debounceTimer: NodeJS.Timeout | null = null;
@@ -37,17 +40,36 @@ export function createWatcher(
     changedFiles = [];
 
     const changedProjects = new Set<string>();
+    const filesByProject = new Map<string, string[]>();
     let isGlobalChange = false;
 
     for (const file of filesToProcess) {
       if (isRootConfig(file, root)) {
         isGlobalChange = true;
+        if (verbose) console.log(`[watcher] Root config changed: ${file}`);
         break;
       }
 
       const project = getProjectFromPath(file, projects, root);
       if (project) {
         changedProjects.add(project);
+        if (!filesByProject.has(project)) {
+          filesByProject.set(project, []);
+        }
+        filesByProject.get(project)!.push(file);
+      } else if (verbose) {
+        console.log(`[watcher] File not in any project: ${file}`);
+      }
+    }
+
+    // Log which files triggered which projects
+    if (verbose) {
+      for (const [project, files] of filesByProject) {
+        console.log(`[watcher] ${project}:`);
+        for (const f of files) {
+          const relativePath = f.replace(root + '/', '');
+          console.log(`  - ${relativePath}`);
+        }
       }
     }
 
@@ -67,7 +89,7 @@ export function createWatcher(
   };
 
   const watcher = chokidar.watch(root, {
-    ignored: ignorePatterns,
+    ignored: allIgnorePatterns,
     persistent: true,
     ignoreInitial: true,
     awaitWriteFinish: {
