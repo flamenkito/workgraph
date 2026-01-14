@@ -100,6 +100,11 @@ export interface UnknownDependency {
   importedFrom: string[];
 }
 
+export interface SourceConfig {
+  command: string;
+  deps?: string[];
+}
+
 export interface WorkgraphConfig {
-  sources?: Record<string, string>;
+  sources?: Record<string, string | SourceConfig>;
 }

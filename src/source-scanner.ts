@@ -8,7 +8,7 @@ const REQUIRE_REGEX = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
 export interface ScanResult {
   unknownDependencies: UnknownDependency[];
-  configuredSources: Map<string, string>;
+  configuredSources: Set<string>;
 }
 
 export async function scanProjectImports(
@@ -165,7 +165,7 @@ export async function scanForUnknownDependencies(
   root: string
 ): Promise<ScanResult> {
   const config = loadWorkgraphConfig(root);
-  const configuredSources = new Map<string, string>(Object.entries(config.sources || {}));
+  const configuredSources = new Set<string>(Object.keys(config.sources || {}));
   const unknownDependencies: UnknownDependency[] = [];
 
   for (const [name, project] of projects) {
