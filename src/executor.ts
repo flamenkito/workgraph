@@ -59,25 +59,18 @@ async function runWithConcurrency<T, R>(
   fn: (item: T) => Promise<R>
 ): Promise<R[]> {
   const results: R[] = [];
-  const executing: Promise<void>[] = [];
+  const executing = new Set<Promise<void>>();
 
   for (const item of items) {
-    const p = fn(item).then((result) => {
+    const p: Promise<void> = fn(item).then((result) => {
       results.push(result);
+      executing.delete(p);
     });
 
-    executing.push(p);
+    executing.add(p);
 
-    if (executing.length >= concurrency) {
+    if (executing.size >= concurrency) {
       await Promise.race(executing);
-      // Remove completed promises
-      const completed = executing.filter(
-        (p) => (p as Promise<void> & { settled?: boolean }).settled
-      );
-      for (const c of completed) {
-        const idx = executing.indexOf(c);
-        if (idx > -1) executing.splice(idx, 1);
-      }
     }
   }
 
