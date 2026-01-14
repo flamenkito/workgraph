@@ -103,5 +103,5 @@ export function isRootConfig(filePath: string, root: string): boolean {
     'tsconfig.base.json',
   ];
 
-  return rootConfigs.includes(relativePath) || !relativePath.includes(path.sep);
+  return rootConfigs.includes(relativePath);
 }

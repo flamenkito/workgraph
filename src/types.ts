@@ -45,14 +45,24 @@ export interface WatcherOptions {
   root: string;
   ignorePatterns?: string[];
   debounceMs?: number;
+  verbose?: boolean;
   onChange: (changedProjects: Set<string>) => void;
+}
+
+export interface BuildStepInfo {
+  project: string;
+  wave: number;
+  totalWaves: number;
+  step: number;
+  totalSteps: number;
+  isParallel: boolean;
 }
 
 export interface ExecutorOptions {
   concurrency?: number;
   buildCommand?: (project: Project) => string;
   dryRun?: boolean;
-  onStart?: (project: string) => void;
+  onStart?: (info: BuildStepInfo) => void;
   onComplete?: (result: ProjectBuildResult) => void;
 }
 
@@ -77,4 +87,19 @@ export interface WatchOptions {
   concurrency?: number;
   debounceMs?: number;
   dryRun?: boolean;
+}
+
+export interface UnknownDependency {
+  /** Project that has the unknown dependency */
+  project: string;
+  /** The import path that couldn't be resolved */
+  importPath: string;
+  /** Resolved absolute path */
+  absolutePath: string;
+  /** Files that import this path */
+  importedFrom: string[];
+}
+
+export interface WorkgraphConfig {
+  sources?: Record<string, string>;
 }

@@ -5,3 +5,4 @@ export * from './affected';
 export * from './planner';
 export * from './watcher';
 export * from './executor';
+export * from './source-scanner';

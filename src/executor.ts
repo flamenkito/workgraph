@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import * as os from 'os';
-import { BuildResult, ExecutorOptions, Project, ProjectBuildResult } from './types';
+import { BuildResult, BuildStepInfo, ExecutorOptions, Project, ProjectBuildResult } from './types';
 
 const DEFAULT_CONCURRENCY = Math.max(1, os.cpus().length - 1);
 
@@ -102,9 +102,12 @@ export async function executePlan(
   const startTime = Date.now();
   const results: ProjectBuildResult[] = [];
   let overallSuccess = true;
+  const totalSteps = waves.reduce((sum, w) => sum + w.length, 0);
+  let currentStep = 0;
 
   for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
     const wave = waves[waveIndex];
+    const isParallel = wave.length > 1;
 
     const waveResults = await runWithConcurrency(
       wave,
@@ -120,7 +123,16 @@ export async function executePlan(
           };
         }
 
-        onStart?.(projectName);
+        currentStep++;
+        const stepInfo: BuildStepInfo = {
+          project: projectName,
+          wave: waveIndex + 1,
+          totalWaves: waves.length,
+          step: currentStep,
+          totalSteps,
+          isParallel,
+        };
+        onStart?.(stepInfo);
 
         const projectStart = Date.now();
 

@@ -10,6 +10,81 @@ import { createBuildPlan, formatBuildPlan } from './planner';
 import { createWatcher, formatTimestamp } from './watcher';
 import { executePlan } from './executor';
 import { Project } from './types';
+import {
+  scanForUnknownDependencies,
+  formatUnknownDependencies,
+  loadWorkgraphConfig,
+} from './source-scanner';
+
+async function runSourceGenerators(
+  root: string,
+  affectedProjects: Set<string>,
+  projects: Map<string, Project>,
+  dryRun: boolean = false
+): Promise<{ success: boolean; generated: string[] }> {
+  const config = loadWorkgraphConfig(root);
+  const sources = config.sources || {};
+  const generated: string[] = [];
+
+  // Find which configured sources are needed by affected projects
+  for (const [sourcePath, command] of Object.entries(sources)) {
+    // Check if any affected project uses this source path
+    const sourceDir = path.resolve(root, sourcePath);
+
+    for (const projectName of affectedProjects) {
+      const project = projects.get(projectName);
+      if (!project) continue;
+
+      // Check if source path is within the project
+      if (sourceDir.startsWith(project.absolutePath)) {
+        console.log(`[${formatTimestamp()}] Generating: ${sourcePath}`);
+
+        if (dryRun) {
+          console.log(`[${formatTimestamp()}]   [dry-run] Would run: ${command}`);
+          generated.push(sourcePath);
+          continue;
+        }
+
+        try {
+          const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
+            const proc = spawn(command, {
+              cwd: root,
+              shell: true,
+              stdio: 'pipe',
+            });
+
+            let output = '';
+            proc.stdout?.on('data', (data) => (output += data));
+            proc.stderr?.on('data', (data) => (output += data));
+
+            proc.on('close', (code) => {
+              resolve({ success: code === 0, output });
+            });
+
+            proc.on('error', (err) => {
+              resolve({ success: false, output: err.message });
+            });
+          });
+
+          if (result.success) {
+            console.log(`[${formatTimestamp()}]   Generated successfully`);
+            generated.push(sourcePath);
+          } else {
+            console.error(`[${formatTimestamp()}]   Generation FAILED`);
+            console.error(result.output);
+            return { success: false, generated };
+          }
+        } catch (error) {
+          console.error(`[${formatTimestamp()}]   Generation FAILED: ${(error as Error).message}`);
+          return { success: false, generated };
+        }
+        break; // Only generate once per source
+      }
+    }
+  }
+
+  return { success: true, generated };
+}
 
 const program = new Command();
 
@@ -45,6 +120,41 @@ program
         process.exit(1);
       } else {
         console.log('No cycles detected');
+      }
+    } catch (error) {
+      console.error('Error:', (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('scan')
+  .description('Scan for unknown dependencies (missing generated sources)')
+  .option('-r, --root <path>', 'Workspace root directory', process.cwd())
+  .action(async (options) => {
+    try {
+      const root = path.resolve(options.root);
+      console.log(`Scanning workspace at: ${root}\n`);
+
+      const projects = await loadWorkspaceProjects(root);
+      console.log(`Scanning ${projects.size} projects for unknown dependencies...\n`);
+
+      const result = await scanForUnknownDependencies(projects, root);
+
+      if (result.configuredSources.size > 0) {
+        console.log('Configured sources:');
+        for (const [sourcePath, command] of result.configuredSources) {
+          console.log(`  ${sourcePath}`);
+          console.log(`    -> ${command}`);
+        }
+        console.log();
+      }
+
+      if (result.unknownDependencies.length > 0) {
+        console.log(formatUnknownDependencies(result.unknownDependencies, root));
+        process.exit(1);
+      } else {
+        console.log('No unknown dependencies found');
       }
     } catch (error) {
       console.error('Error:', (error as Error).message);
@@ -139,11 +249,22 @@ program
         return;
       }
 
+      // Run source generators before build
+      const sourceResult = await runSourceGenerators(root, affected, projects, options.dryRun);
+      if (!sourceResult.success) {
+        console.error('Source generation failed, aborting build');
+        process.exit(1);
+      }
+      if (sourceResult.generated.length > 0) {
+        console.log();
+      }
+
       const result = await executePlan(plan.waves, projects, root, {
         concurrency: parseInt(options.concurrency, 10),
         dryRun: options.dryRun,
-        onStart: (project) => {
-          console.log(`[${formatTimestamp()}] Building: ${project}`);
+        onStart: (info) => {
+          const mode = info.isParallel ? 'parallel' : 'sequential';
+          console.log(`[${formatTimestamp()}] Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
         },
         onComplete: (result) => {
           const status = result.success ? 'done' : 'FAILED';
@@ -178,6 +299,7 @@ program
   .option('--debounce <ms>', 'Debounce time in milliseconds', String(200))
   .option('--dry-run', 'Show what would be built without executing')
   .option('--filter <pattern>', 'Only build projects matching pattern (e.g., "libs/*")')
+  .option('--verbose', 'Show detailed watcher and build output')
   .action(async (apps: string[], options) => {
     try {
       const root = path.resolve(options.root);
@@ -197,6 +319,62 @@ program
         if (resolvedApps.size === 0) {
           console.error('Could not resolve any apps from:', apps);
           process.exit(1);
+        }
+
+        // Build dependencies before starting dev servers
+        // Get all dependencies of the apps (not the apps themselves)
+        const depsToBuilt = new Set<string>();
+        for (const appName of resolvedApps) {
+          const appDeps = graph.deps.get(appName) || new Set();
+          for (const dep of appDeps) {
+            depsToBuilt.add(dep);
+            // Also add transitive dependencies
+            const transitiveDeps = graph.deps.get(dep) || new Set();
+            for (const td of transitiveDeps) {
+              depsToBuilt.add(td);
+            }
+          }
+        }
+
+        // Include apps themselves for source generation
+        const affected = new Set([...resolvedApps, ...depsToBuilt]);
+
+        // Run source generators first (always, even if no lib deps)
+        const sourceResult = await runSourceGenerators(root, affected, projects, options.dryRun);
+        if (!sourceResult.success) {
+          console.error('Source generation failed, continuing anyway...');
+        }
+
+        if (depsToBuilt.size > 0) {
+          console.log(`Building ${depsToBuilt.size} dependencies first...\n`);
+
+          // Build dependencies
+          const plan = createBuildPlan(depsToBuilt, graph.deps);
+          if (plan.waves.length > 0) {
+            const result = await executePlan(plan.waves, projects, root, {
+              concurrency: parseInt(options.concurrency, 10),
+              dryRun: options.dryRun,
+              onStart: (info) => {
+                const mode = info.isParallel ? 'parallel' : 'sequential';
+                console.log(`[${formatTimestamp()}] Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
+              },
+              onComplete: (buildResult) => {
+                const status = buildResult.success ? 'done' : 'FAILED';
+                console.log(
+                  `[${formatTimestamp()}] ${buildResult.project}: ${status} (${buildResult.duration}ms)`
+                );
+                if (!buildResult.success && buildResult.error) {
+                  console.error(buildResult.error);
+                }
+              },
+            });
+
+            if (result.success) {
+              console.log(`[${formatTimestamp()}] Dependencies built successfully\n`);
+            } else {
+              console.error(`[${formatTimestamp()}] Dependency build had errors, continuing anyway...\n`);
+            }
+          }
         }
 
         for (const appName of resolvedApps) {
@@ -219,17 +397,21 @@ program
           const shortName = appName.includes('/') ? appName.split('/').pop() : appName;
           const prefix = `[${shortName}]`;
 
+          // Strip console clear escape sequences
+          const stripClearCodes = (text: string) =>
+            text.replace(/\x1b\[[0-9]*J|\x1b\[[0-9]*H|\x1bc/g, '');
+
           proc.stdout?.on('data', (data: Buffer) => {
-            const lines = data.toString().trim().split('\n');
+            const lines = stripClearCodes(data.toString()).trim().split('\n');
             for (const line of lines) {
-              console.log(`${prefix} ${line}`);
+              if (line) console.log(`${prefix} ${line}`);
             }
           });
 
           proc.stderr?.on('data', (data: Buffer) => {
-            const lines = data.toString().trim().split('\n');
+            const lines = stripClearCodes(data.toString()).trim().split('\n');
             for (const line of lines) {
-              console.error(`${prefix} ${line}`);
+              if (line) console.error(`${prefix} ${line}`);
             }
           });
 
@@ -312,14 +494,23 @@ program
 
         const plan = createBuildPlan(filteredAffected, graph.deps);
 
+        // Run source generators for affected projects
+        const sourceResult = await runSourceGenerators(root, affected, projects, options.dryRun);
+        if (!sourceResult.success) {
+          console.error(`[${formatTimestamp()}] Source generation failed\n`);
+          isBuilding = false;
+          return;
+        }
+
         console.log(`[${formatTimestamp()}] Building: ${[...filteredAffected].join(', ')}`);
 
         if (plan.waves.length > 0) {
           const result = await executePlan(plan.waves, projects, root, {
             concurrency: parseInt(options.concurrency, 10),
             dryRun: options.dryRun,
-            onStart: (project) => {
-              console.log(`[${formatTimestamp()}] Building: ${project}`);
+            onStart: (info) => {
+              const mode = info.isParallel ? 'parallel' : 'sequential';
+              console.log(`[${formatTimestamp()}] Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
             },
             onComplete: (buildResult) => {
               const status = buildResult.success ? 'done' : 'FAILED';
@@ -345,11 +536,25 @@ program
         }
       };
 
+      // Get configured source paths to ignore (prevents infinite loop when generators write files)
+      const config = loadWorkgraphConfig(root);
+      const sourcePaths = Object.keys(config.sources || {}).map(p => `**/${p}/**`);
+
+      if (sourcePaths.length > 0) {
+        console.log('Ignoring generated source paths (to prevent rebuild loops):');
+        for (const p of sourcePaths) {
+          console.log(`  ${p}`);
+        }
+        console.log();
+      }
+
       createWatcher(
         {
           root,
           debounceMs: parseInt(options.debounce, 10),
           onChange: handleChanges,
+          ignorePatterns: sourcePaths,
+          verbose: options.verbose,
         },
         projects
       );
