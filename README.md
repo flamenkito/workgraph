@@ -335,6 +335,10 @@ Changes to root configuration files trigger a rebuild of all projects:
 - `tsconfig.json`
 - `tsconfig.base.json`
 
+## Publishing
+
+See [RELEASING.md](./RELEASING.md) for publishing instructions.
+
 ## License
 
 MIT
