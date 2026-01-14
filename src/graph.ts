@@ -75,29 +75,6 @@ export function detectCycles(graph: DependencyGraph): string[][] | null {
   return cycles.length > 0 ? cycles : null;
 }
 
-export function getTopologicalOrder(graph: DependencyGraph): string[] {
-  const visited = new Set<string>();
-  const result: string[] = [];
-
-  function visit(node: string): void {
-    if (visited.has(node)) return;
-    visited.add(node);
-
-    const nodeDeps = graph.deps.get(node) || new Set();
-    for (const dep of nodeDeps) {
-      visit(dep);
-    }
-
-    result.push(node);
-  }
-
-  for (const name of graph.projects.keys()) {
-    visit(name);
-  }
-
-  return result;
-}
-
 export function formatGraph(graph: DependencyGraph): string {
   const lines: string[] = [];
 

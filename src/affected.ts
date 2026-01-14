@@ -1,5 +1,4 @@
-import { DependencyGraph, Project } from './types';
-import { getProjectFromPath } from './workspace';
+import { DependencyGraph } from './types';
 
 export function getAffectedProjects(
   changedProjects: Set<string>,
@@ -23,23 +22,6 @@ export function getAffectedProjects(
   }
 
   return affected;
-}
-
-export function getChangedProjectsFromFiles(
-  changedFiles: string[],
-  projects: Map<string, Project>,
-  root: string
-): Set<string> {
-  const changedProjects = new Set<string>();
-
-  for (const file of changedFiles) {
-    const project = getProjectFromPath(file, projects, root);
-    if (project) {
-      changedProjects.add(project);
-    }
-  }
-
-  return changedProjects;
 }
 
 export function resolveProjectNames(
