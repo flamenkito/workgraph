@@ -1,0 +1,50 @@
+{
+  "name": "worktree",
+  "version": "0.0.1",
+  "description": "Workspace dependency analyzer and parallel build orchestrator for monorepos",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "worktree": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "monorepo",
+    "workspace",
+    "build",
+    "orchestrator",
+    "parallel",
+    "dependency",
+    "graph",
+    "watch",
+    "npm",
+    "yarn",
+    "pnpm",
+    "turborepo",
+    "nx",
+    "lerna"
+  ],
+  "author": "asutov@outlook.com",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "commander": "^12.0.0",
+    "glob": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "typescript": "^5.7.3"
+  }
+}
