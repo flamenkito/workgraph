@@ -379,15 +379,7 @@ program
           }
         }
 
-        // Include apps themselves for source generation
-        const affected = new Set([...resolvedApps, ...depsToBuilt]);
-
-        // Run source generators first (always, even if no lib deps)
-        const sourceResult = await runSourceGenerators(root, affected, projects, options.dryRun);
-        if (!sourceResult.success) {
-          console.error('Source generation failed, continuing anyway...');
-        }
-
+        // Build dependencies first (source generators may need them)
         if (depsToBuilt.size > 0) {
           console.log(`Building ${depsToBuilt.size} dependencies first...\n`);
 
@@ -418,6 +410,15 @@ program
               console.error(`[${formatTimestamp()}] Dependency build had errors, continuing anyway...\n`);
             }
           }
+        }
+
+        // Include apps themselves for source generation
+        const affected = new Set([...resolvedApps, ...depsToBuilt]);
+
+        // Run source generators after dependencies are built
+        const sourceResult = await runSourceGenerators(root, affected, projects, options.dryRun);
+        if (!sourceResult.success) {
+          console.error('Source generation failed, continuing anyway...');
         }
 
         for (const appName of resolvedApps) {
