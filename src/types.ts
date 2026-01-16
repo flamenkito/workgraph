@@ -46,7 +46,7 @@ export interface WatcherOptions {
   ignorePatterns?: string[];
   debounceMs?: number;
   verbose?: boolean;
-  onChange: (changedProjects: Set<string>) => void;
+  onChange: (changedProjects: Set<string>, changedFiles: Map<string, string[]>) => void;
 }
 
 export interface BuildStepInfo {
@@ -64,6 +64,7 @@ export interface ExecutorOptions {
   dryRun?: boolean;
   onStart?: (info: BuildStepInfo) => void;
   onComplete?: (result: ProjectBuildResult) => void;
+  onOutput?: (line: string) => void;
 }
 
 export interface AnalyzeOptions {

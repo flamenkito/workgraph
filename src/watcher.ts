@@ -67,7 +67,7 @@ export function createWatcher(
     }
 
     if (changedProjects.size > 0) {
-      onChange(changedProjects);
+      onChange(changedProjects, filesByProject);
     }
   };
 

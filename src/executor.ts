@@ -14,7 +14,8 @@ export function defaultBuildCommand(project: Project): string {
 
 async function runCommand(
   command: string,
-  cwd: string
+  cwd: string,
+  onOutput?: (line: string) => void
 ): Promise<{ success: boolean; output: string; error?: string }> {
   return new Promise((resolve) => {
     const [cmd, ...args] = command.split(' ');
@@ -27,13 +28,25 @@ async function runCommand(
     let stdout = '';
     let stderr = '';
 
-    proc.stdout?.on('data', (data) => {
-      stdout += data.toString();
-    });
+    const processOutput = (data: Buffer, isError: boolean) => {
+      const text = data.toString();
+      if (isError) {
+        stderr += text;
+      } else {
+        stdout += text;
+      }
+      if (onOutput) {
+        const lines = text.split('\n');
+        for (const line of lines) {
+          if (line.trim()) {
+            onOutput(line);
+          }
+        }
+      }
+    };
 
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
+    proc.stdout?.on('data', (data) => processOutput(data, false));
+    proc.stderr?.on('data', (data) => processOutput(data, true));
 
     proc.on('close', (code) => {
       resolve({
@@ -90,6 +103,7 @@ export async function executePlan(
     dryRun = false,
     onStart,
     onComplete,
+    onOutput,
   } = options;
 
   const startTime = Date.now();
@@ -127,10 +141,16 @@ export async function executePlan(
         };
         onStart?.(stepInfo);
 
+        const cmd = buildCommand(project);
+        if (onOutput) {
+          onOutput(`\x1b[33m$ ${cmd}\x1b[0m`);
+        } else {
+          console.log(`\x1b[33m$ ${cmd}\x1b[0m`);
+        }
+
         const projectStart = Date.now();
 
         if (dryRun) {
-          const cmd = buildCommand(project);
           return {
             project: projectName,
             success: true,
@@ -139,8 +159,7 @@ export async function executePlan(
           };
         }
 
-        const cmd = buildCommand(project);
-        const result = await runCommand(cmd, root);
+        const result = await runCommand(cmd, root, onOutput);
         const duration = Date.now() - projectStart;
 
         const buildResult: ProjectBuildResult = {
