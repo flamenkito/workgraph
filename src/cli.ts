@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, spawnSync, ChildProcess } from 'child_process';
 import * as path from 'path';
 import { loadWorkspaceProjects } from './workspace';
 import { buildGraph, detectCycles, formatGraph } from './graph';
@@ -419,16 +419,52 @@ program
       const taskLog = ui ? ui.taskLog : (msg: string) => console.log(msg);
       const setStatus = ui ? ui.setStatus : () => {};
 
-      // Cleanup on exit
-      if (ui) {
-        process.on('SIGINT', () => {
-          ui.destroy();
-          process.exit(0);
-        });
-      }
-
       // Start dev servers for specified apps
-      const devProcesses: ChildProcess[] = [];
+      const devProcesses: { proc: ChildProcess; name: string; command: string }[] = [];
+
+      // Unified cleanup handler for all resources
+      const cleanup = () => {
+        if (ui) {
+          ui.destroy();
+        }
+
+        // Collect kill results
+        const results: string[] = [];
+        results.push('Cleaning up dev servers...');
+
+        // Kill all dev server process groups with SIGKILL for immediate termination
+        for (const { proc, name, command } of devProcesses) {
+          if (proc.pid) {
+            results.push(`Killing: pid=${proc.pid}, name=${name}, command="${command}"`);
+            try {
+              process.kill(-proc.pid, 'SIGKILL');
+              results.push(`  -> Killed process group -${proc.pid}`);
+            } catch (err) {
+              results.push(`  -> Failed to kill group: ${(err as Error).message}`);
+              try {
+                process.kill(proc.pid, 'SIGKILL');
+                results.push(`  -> Killed process ${proc.pid}`);
+              } catch (err2) {
+                results.push(`  -> Failed to kill process: ${(err2 as Error).message}`);
+              }
+            }
+          }
+        }
+
+        results.push('Cleanup complete.');
+
+        // Use separate process to print after blessed cleanup
+        spawnSync('echo', [''], { stdio: 'inherit' });
+        spawnSync('echo', ['Bye bye workgraph...'], { stdio: 'inherit' });
+        for (const line of results) {
+          spawnSync('echo', [line], { stdio: 'inherit' });
+        }
+
+        process.exit(0);
+      };
+
+      process.on('SIGINT', cleanup);
+      process.on('SIGTERM', cleanup);
       if (apps.length > 0) {
         const resolvedApps = resolveProjectNames(apps, graph);
         if (resolvedApps.size === 0) {
@@ -510,7 +546,7 @@ program
           const proc = spawn('npm', ['run', 'dev', '-w', appName], {
             cwd: root,
             stdio: ['ignore', 'pipe', 'pipe'],
-            shell: true,
+            detached: true,  // Create process group for proper cleanup
           });
 
           const shortName = appName.includes('/') ? appName.split('/').pop() : appName;
@@ -539,18 +575,8 @@ program
             log(`${prefix} exited with code ${code}`);
           });
 
-          devProcesses.push(proc);
+          devProcesses.push({ proc, name: appName, command: devCmd });
         }
-
-        // Handle cleanup on exit
-        const cleanup = () => {
-          for (const proc of devProcesses) {
-            proc.kill();
-          }
-          process.exit(0);
-        };
-        process.on('SIGINT', cleanup);
-        process.on('SIGTERM', cleanup);
 
         console.log();
       }

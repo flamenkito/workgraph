@@ -64,10 +64,9 @@ export function createUI(): UI {
     tags: true,
   });
 
-  // Handle quit
+  // Handle quit - emit SIGINT to trigger CLI's cleanup handler
   screen.key(['C-c'], () => {
-    screen.destroy();
-    process.exit(0);
+    process.emit('SIGINT', 'SIGINT');
   });
 
   // Tab to switch focus between panes
