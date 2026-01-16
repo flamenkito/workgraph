@@ -10,6 +10,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "prepublishOnly": "npm run build",
     "version": "npm run build && git add -A",
     "postversion": "git push --follow-tags"
@@ -48,7 +50,12 @@
     "glob": "^10.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.18.0",
     "@types/node": "^22.10.7",
-    "typescript": "^5.7.3"
+    "eslint": "^9.18.0",
+    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-sonarjs": "^3.0.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.21.0"
   }
 }
