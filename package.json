@@ -41,6 +41,8 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@types/blessed": "^0.1.27",
+    "blessed": "^0.1.81",
     "chokidar": "^3.6.0",
     "commander": "^12.0.0",
     "glob": "^10.0.0"

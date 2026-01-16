@@ -15,6 +15,7 @@ import {
   formatUnknownDependencies,
   loadWorkgraphConfig,
 } from './source-scanner';
+import { createUI } from './ui';
 
 function normalizeSourceConfig(config: string | SourceConfig): SourceConfig {
   if (typeof config === 'string') {
@@ -63,11 +64,13 @@ function shouldRunGenerator(
   return false;
 }
 
-async function runSourceGenerators(
+async function runSourceGeneratorsWithUI(
   root: string,
   affectedProjects: Set<string>,
   projects: Map<string, Project>,
-  dryRun: boolean = false
+  dryRun: boolean = false,
+  log: (msg: string) => void = (msg) => console.log(`[${formatTimestamp()}] ${msg}`),
+  taskLog: (msg: string) => void = console.log
 ): Promise<{ success: boolean; generated: string[] }> {
   const config = loadWorkgraphConfig(root);
   const sources = config.sources || {};
@@ -80,10 +83,10 @@ async function runSourceGenerators(
       continue;
     }
 
-    console.log(`[${formatTimestamp()}] Generating: ${sourcePath}`);
+    log(`Generating: ${sourcePath}`);
+    taskLog(`\x1b[33m$ ${sourceConfig.command}\x1b[0m`);
 
     if (dryRun) {
-      console.log(`[${formatTimestamp()}]   [dry-run] Would run: ${sourceConfig.command}`);
       generated.push(sourcePath);
       continue;
     }
@@ -97,8 +100,20 @@ async function runSourceGenerators(
         });
 
         let output = '';
-        proc.stdout?.on('data', (data) => (output += data));
-        proc.stderr?.on('data', (data) => (output += data));
+        proc.stdout?.on('data', (data) => {
+          const text = data.toString();
+          output += text;
+          text.split('\n').forEach((line: string) => {
+            if (line.trim()) taskLog(line);
+          });
+        });
+        proc.stderr?.on('data', (data) => {
+          const text = data.toString();
+          output += text;
+          text.split('\n').forEach((line: string) => {
+            if (line.trim()) taskLog(line);
+          });
+        });
 
         proc.on('close', (code) => {
           resolve({ success: code === 0, output });
@@ -110,15 +125,14 @@ async function runSourceGenerators(
       });
 
       if (result.success) {
-        console.log(`[${formatTimestamp()}]   Generated successfully`);
+        log('Generated successfully');
         generated.push(sourcePath);
       } else {
-        console.error(`[${formatTimestamp()}]   Generation FAILED`);
-        console.error(result.output);
+        log('Generation FAILED');
         return { success: false, generated };
       }
     } catch (error) {
-      console.error(`[${formatTimestamp()}]   Generation FAILED: ${(error as Error).message}`);
+      log(`Generation FAILED: ${(error as Error).message}`);
       return { success: false, generated };
     }
   }
@@ -293,7 +307,7 @@ program
       }
 
       // Run source generators before build
-      const sourceResult = await runSourceGenerators(root, affected, projects, options.dryRun);
+      const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun);
       if (!sourceResult.success) {
         console.error('Source generation failed, aborting build');
         process.exit(1);
@@ -343,6 +357,7 @@ program
   .option('--dry-run', 'Show what would be built without executing')
   .option('--filter <pattern>', 'Only build projects matching pattern (e.g., "libs/*")')
   .option('--verbose', 'Show detailed watcher and build output')
+  .option('--no-ui', 'Disable split-screen UI')
   .action(async (apps: string[], options) => {
     try {
       const root = path.resolve(options.root);
@@ -353,6 +368,20 @@ program
       if (cycles) {
         console.error('Cannot watch: cycles detected in dependency graph');
         process.exit(1);
+      }
+
+      // Create split-screen UI if enabled
+      const ui = options.ui !== false ? createUI() : null;
+      const log = ui ? ui.log : (msg: string) => console.log(`[${formatTimestamp()}] ${msg}`);
+      const logRaw = ui ? (msg: string) => ui.leftPane.log(msg) : (msg: string) => console.log(msg);
+      const taskLog = ui ? ui.taskLog : (msg: string) => console.log(msg);
+
+      // Cleanup on exit
+      if (ui) {
+        process.on('SIGINT', () => {
+          ui.destroy();
+          process.exit(0);
+        });
       }
 
       // Start dev servers for specified apps
@@ -381,7 +410,7 @@ program
 
         // Build dependencies first (source generators may need them)
         if (depsToBuilt.size > 0) {
-          console.log(`Building ${depsToBuilt.size} dependencies first...\n`);
+          log(`Building ${depsToBuilt.size} dependencies first...`);
 
           // Build dependencies
           const plan = createBuildPlan(depsToBuilt, graph.deps);
@@ -391,23 +420,22 @@ program
               dryRun: options.dryRun,
               onStart: (info) => {
                 const mode = info.isParallel ? 'parallel' : 'sequential';
-                console.log(`[${formatTimestamp()}] Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
+                log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
               },
               onComplete: (buildResult) => {
                 const status = buildResult.success ? 'done' : 'FAILED';
-                console.log(
-                  `[${formatTimestamp()}] ${buildResult.project}: ${status} (${buildResult.duration}ms)`
-                );
+                log(`${buildResult.project}: ${status} (${buildResult.duration}ms)`);
                 if (!buildResult.success && buildResult.error) {
-                  console.error(buildResult.error);
+                  taskLog(buildResult.error);
                 }
               },
+              onOutput: taskLog,
             });
 
             if (result.success) {
-              console.log(`[${formatTimestamp()}] Dependencies built successfully\n`);
+              log('Dependencies built successfully');
             } else {
-              console.error(`[${formatTimestamp()}] Dependency build had errors, continuing anyway...\n`);
+              log('Dependency build had errors, continuing anyway...');
             }
           }
         }
@@ -416,9 +444,9 @@ program
         const affected = new Set([...resolvedApps, ...depsToBuilt]);
 
         // Run source generators after dependencies are built
-        const sourceResult = await runSourceGenerators(root, affected, projects, options.dryRun);
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, log, taskLog);
         if (!sourceResult.success) {
-          console.error('Source generation failed, continuing anyway...');
+          log('Source generation failed, continuing anyway...');
         }
 
         for (const appName of resolvedApps) {
@@ -427,11 +455,14 @@ program
 
           const hasDevScript = project.packageJson.scripts?.dev;
           if (!hasDevScript) {
-            console.warn(`Warning: ${appName} has no dev script, skipping`);
+            log(`Warning: ${appName} has no dev script, skipping`);
             continue;
           }
 
-          console.log(`Starting dev server: ${appName}`);
+          const devCmd = `npm run dev -w ${appName}`;
+          log(`Starting dev server: ${appName}`);
+          taskLog(`\x1b[33m$ ${devCmd}\x1b[0m`);
+
           const proc = spawn('npm', ['run', 'dev', '-w', appName], {
             cwd: root,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -448,19 +479,19 @@ program
           proc.stdout?.on('data', (data: Buffer) => {
             const lines = stripClearCodes(data.toString()).trim().split('\n');
             for (const line of lines) {
-              if (line) console.log(`${prefix} ${line}`);
+              if (line) taskLog(`${prefix} ${line}`);
             }
           });
 
           proc.stderr?.on('data', (data: Buffer) => {
             const lines = stripClearCodes(data.toString()).trim().split('\n');
             for (const line of lines) {
-              if (line) console.error(`${prefix} ${line}`);
+              if (line) taskLog(`${prefix} ${line}`);
             }
           });
 
           proc.on('close', (code) => {
-            console.log(`${prefix} exited with code ${code}`);
+            log(`${prefix} exited with code ${code}`);
           });
 
           devProcesses.push(proc);
@@ -499,16 +530,17 @@ program
         ? [...projects.keys()].filter(matchesFilter).length
         : projects.size;
 
-      console.log(`Watching ${projects.size} projects for changes...`);
+      log(`Watching ${projects.size} projects for changes...`);
       if (filterPattern) {
-        console.log(`Building only projects matching: ${filterPattern} (${filteredCount} projects)`);
+        log(`Building only projects matching: ${filterPattern} (${filteredCount} projects)`);
       }
-      console.log('Press Ctrl+C to stop\n');
+      log('Press Ctrl+C to stop');
 
       let isBuilding = false;
       let pendingChanges: Set<string> | null = null;
+      let buildCount = 0;
 
-      const handleChanges = async (changedProjects: Set<string>) => {
+      const handleChanges = async (changedProjects: Set<string>, changedFiles?: Map<string, string[]>) => {
         if (isBuilding) {
           pendingChanges = pendingChanges || new Set();
           for (const p of changedProjects) {
@@ -519,9 +551,17 @@ program
 
         isBuilding = true;
 
-        console.log(
-          `[${formatTimestamp()}] Changes detected: ${[...changedProjects].join(', ')}`
-        );
+        log('Changes detected:');
+        if (changedFiles) {
+          for (const [project, files] of changedFiles) {
+            for (const file of files) {
+              const relativePath = file.replace(root + '/', '');
+              logRaw(`  ${relativePath} (${project})`);
+            }
+          }
+        } else {
+          logRaw(`  ${[...changedProjects].join(', ')} (pending)`);
+        }
 
         const affected = getAffectedProjects(changedProjects, graph.rdeps);
 
@@ -531,22 +571,52 @@ program
         );
 
         if (filteredAffected.size === 0) {
-          console.log(`[${formatTimestamp()}] No matching projects to build\n`);
+          log('No matching projects to build');
           isBuilding = false;
           return;
         }
+
+        buildCount++;
+        logRaw(`\n\x1b[36m>>> Build #${buildCount} started\x1b[0m\n`);
 
         const plan = createBuildPlan(filteredAffected, graph.deps);
+        const totalSteps = plan.waves.reduce((sum, w) => sum + w.length, 0);
+
+        // Display affected dependencies graph
+        logRaw('Affected dependencies:');
+        for (const proj of [...filteredAffected].sort()) {
+          const deps = graph.deps.get(proj) || new Set();
+          const affectedDeps = [...deps].filter(d => filteredAffected.has(d));
+          if (affectedDeps.length > 0) {
+            logRaw(`  ${proj} -> ${affectedDeps.join(', ')}`);
+          } else {
+            logRaw(`  ${proj} (no affected dependencies)`);
+          }
+        }
+
+        // Display compilation plan
+        logRaw('Compilation plan:');
+        let stepCounter = 0;
+        for (let i = 0; i < plan.waves.length; i++) {
+          const wave = plan.waves[i];
+          const mode = wave.length > 1 ? 'parallel' : 'sequential';
+          for (const proj of wave) {
+            stepCounter++;
+            logRaw(`  [${stepCounter}/${totalSteps}] ${proj} (wave ${i + 1}/${plan.waves.length}, ${mode})`);
+          }
+        }
+        logRaw('');
 
         // Run source generators for affected projects
-        const sourceResult = await runSourceGenerators(root, affected, projects, options.dryRun);
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, log, taskLog);
         if (!sourceResult.success) {
-          console.error(`[${formatTimestamp()}] Source generation failed\n`);
+          log('Source generation failed');
+          logRaw(`\n\x1b[31m<<< Build #${buildCount} failed\x1b[0m\n`);
           isBuilding = false;
           return;
         }
 
-        console.log(`[${formatTimestamp()}] Building: ${[...filteredAffected].join(', ')}`);
+        log(`Building: ${[...filteredAffected].join(', ')}`);
 
         if (plan.waves.length > 0) {
           const result = await executePlan(plan.waves, projects, root, {
@@ -554,21 +624,22 @@ program
             dryRun: options.dryRun,
             onStart: (info) => {
               const mode = info.isParallel ? 'parallel' : 'sequential';
-              console.log(`[${formatTimestamp()}] Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
+              log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
             },
+            onOutput: taskLog,
             onComplete: (buildResult) => {
               const status = buildResult.success ? 'done' : 'FAILED';
-              console.log(
-                `[${formatTimestamp()}] ${buildResult.project}: ${status} (${buildResult.duration}ms)`
-              );
+              log(`${buildResult.project}: ${status} (${buildResult.duration}ms)`);
             },
           });
 
           if (result.success) {
-            console.log(`[${formatTimestamp()}] Build complete\n`);
+            logRaw(`\n\x1b[32m<<< Build #${buildCount} done\x1b[0m\n`);
           } else {
-            console.error(`[${formatTimestamp()}] Build failed\n`);
+            logRaw(`\n\x1b[31m<<< Build #${buildCount} failed\x1b[0m\n`);
           }
+        } else {
+          logRaw(`\n\x1b[32m<<< Build #${buildCount} done\x1b[0m\n`);
         }
 
         isBuilding = false;
@@ -585,11 +656,10 @@ program
       const sourcePaths = Object.keys(config.sources || {}).map(p => `**/${p}/**`);
 
       if (sourcePaths.length > 0) {
-        console.log('Ignoring generated source paths (to prevent rebuild loops):');
+        log('Ignoring generated source paths (to prevent rebuild loops):');
         for (const p of sourcePaths) {
-          console.log(`  ${p}`);
+          logRaw(`  ${p}`);
         }
-        console.log();
       }
 
       createWatcher(
