@@ -17,6 +17,36 @@ import {
 } from './source-scanner';
 import { createUI } from './ui';
 
+interface AnalyzeCommandOptions {
+  root: string;
+}
+
+interface ScanCommandOptions {
+  root: string;
+}
+
+interface PlanCommandOptions {
+  root: string;
+  changed: string[];
+}
+
+interface BuildCommandOptions {
+  root: string;
+  changed: string[];
+  concurrency: string;
+  dryRun: boolean | undefined;
+}
+
+interface WatchCommandOptions {
+  root: string;
+  concurrency: string;
+  debounce: string;
+  dryRun: boolean | undefined;
+  filter: string | undefined;
+  verbose: boolean | undefined;
+  ui: boolean;
+}
+
 function normalizeSourceConfig(config: string | SourceConfig): SourceConfig {
   if (typeof config === 'string') {
     return { command: config };
@@ -73,7 +103,7 @@ async function runSourceGeneratorsWithUI(
   taskLog: (msg: string) => void = console.log
 ): Promise<{ success: boolean; generated: string[] }> {
   const config = loadWorkgraphConfig(root);
-  const sources = config.sources || {};
+  const sources = config.sources ?? {};
   const generated: string[] = [];
 
   for (const [sourcePath, rawConfig] of Object.entries(sources)) {
@@ -93,6 +123,7 @@ async function runSourceGeneratorsWithUI(
 
     try {
       const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
+        // eslint-disable-next-line sonarjs/os-command
         const proc = spawn(sourceConfig.command, {
           cwd: root,
           shell: true,
@@ -100,14 +131,14 @@ async function runSourceGeneratorsWithUI(
         });
 
         let output = '';
-        proc.stdout?.on('data', (data) => {
+        proc.stdout?.on('data', (data: Buffer) => {
           const text = data.toString();
           output += text;
           text.split('\n').forEach((line: string) => {
             if (line.trim()) taskLog(line);
           });
         });
-        proc.stderr?.on('data', (data) => {
+        proc.stderr?.on('data', (data: Buffer) => {
           const text = data.toString();
           output += text;
           text.split('\n').forEach((line: string) => {
@@ -151,7 +182,7 @@ program
   .command('analyze')
   .description('Analyze workspace dependencies and show graph')
   .option('-r, --root <path>', 'Workspace root directory', process.cwd())
-  .action(async (options) => {
+  .action(async (options: AnalyzeCommandOptions) => {
     try {
       const root = path.resolve(options.root);
       console.log(`Analyzing workspace at: ${root}\n`);
@@ -185,7 +216,7 @@ program
   .command('scan')
   .description('Scan for unknown dependencies (missing generated sources)')
   .option('-r, --root <path>', 'Workspace root directory', process.cwd())
-  .action(async (options) => {
+  .action(async (options: ScanCommandOptions) => {
     try {
       const root = path.resolve(options.root);
       console.log(`Scanning workspace at: ${root}\n`);
@@ -199,7 +230,8 @@ program
         console.log('Configured sources:');
         const config = loadWorkgraphConfig(root);
         for (const sourcePath of result.configuredSources) {
-          const sourceConfig = config.sources![sourcePath];
+          const sourceConfig = config.sources?.[sourcePath];
+          if (!sourceConfig) continue;
           const command = typeof sourceConfig === 'string' ? sourceConfig : sourceConfig.command;
           console.log(`  ${sourcePath}`);
           console.log(`    -> ${command}`);
@@ -228,7 +260,7 @@ program
     'Changed projects (names or paths)',
     []
   )
-  .action(async (options) => {
+  .action(async (options: PlanCommandOptions) => {
     try {
       const root = path.resolve(options.root);
       const projects = await loadWorkspaceProjects(root);
@@ -275,7 +307,7 @@ program
   )
   .option('--concurrency <number>', 'Max parallel builds', String(4))
   .option('--dry-run', 'Show what would be built without executing')
-  .action(async (options) => {
+  .action(async (options: BuildCommandOptions) => {
     try {
       const root = path.resolve(options.root);
       const projects = await loadWorkspaceProjects(root);
@@ -307,7 +339,7 @@ program
       }
 
       // Run source generators before build
-      const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun);
+      const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun ?? false);
       if (!sourceResult.success) {
         console.error('Source generation failed, aborting build');
         process.exit(1);
@@ -318,7 +350,7 @@ program
 
       const result = await executePlan(plan.waves, projects, root, {
         concurrency: parseInt(options.concurrency, 10),
-        dryRun: options.dryRun,
+        dryRun: options.dryRun ?? false,
         onStart: (info) => {
           const mode = info.isParallel ? 'parallel' : 'sequential';
           console.log(`[${formatTimestamp()}] Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
@@ -358,7 +390,7 @@ program
   .option('--filter <pattern>', 'Only build projects matching pattern (e.g., "libs/*")')
   .option('--verbose', 'Show detailed watcher and build output')
   .option('--no-ui', 'Disable split-screen UI')
-  .action(async (apps: string[], options) => {
+  .action(async (apps: string[], options: WatchCommandOptions) => {
     try {
       const root = path.resolve(options.root);
       const projects = await loadWorkspaceProjects(root);
@@ -375,6 +407,7 @@ program
       const log = ui ? ui.log : (msg: string) => console.log(`[${formatTimestamp()}] ${msg}`);
       const logRaw = ui ? (msg: string) => ui.leftPane.log(msg) : (msg: string) => console.log(msg);
       const taskLog = ui ? ui.taskLog : (msg: string) => console.log(msg);
+      const setStatus = ui ? ui.setStatus : () => {};
 
       // Cleanup on exit
       if (ui) {
@@ -417,7 +450,7 @@ program
           if (plan.waves.length > 0) {
             const result = await executePlan(plan.waves, projects, root, {
               concurrency: parseInt(options.concurrency, 10),
-              dryRun: options.dryRun,
+              dryRun: options.dryRun ?? false,
               onStart: (info) => {
                 const mode = info.isParallel ? 'parallel' : 'sequential';
                 log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
@@ -444,7 +477,7 @@ program
         const affected = new Set([...resolvedApps, ...depsToBuilt]);
 
         // Run source generators after dependencies are built
-        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, log, taskLog);
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun ?? false, log, taskLog);
         if (!sourceResult.success) {
           log('Source generation failed, continuing anyway...');
         }
@@ -453,7 +486,7 @@ program
           const project = projects.get(appName);
           if (!project) continue;
 
-          const hasDevScript = project.packageJson.scripts?.dev;
+          const hasDevScript = project.packageJson.scripts?.['dev'];
           if (!hasDevScript) {
             log(`Warning: ${appName} has no dev script, skipping`);
             continue;
@@ -463,6 +496,7 @@ program
           log(`Starting dev server: ${appName}`);
           taskLog(`\x1b[33m$ ${devCmd}\x1b[0m`);
 
+          // eslint-disable-next-line sonarjs/no-os-command-from-path
           const proc = spawn('npm', ['run', 'dev', '-w', appName], {
             cwd: root,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -473,8 +507,9 @@ program
           const prefix = `[${shortName}]`;
 
           // Strip console clear escape sequences
-          const stripClearCodes = (text: string) =>
-            text.replace(/\x1b\[[0-9]*J|\x1b\[[0-9]*H|\x1bc/g, '');
+          const ESC = '\x1b';
+          const clearRegex = new RegExp(`${ESC}\\[\\d*J|${ESC}\\[\\d*H|${ESC}c`, 'g');
+          const stripClearCodes = (text: string) => text.replace(clearRegex, '');
 
           proc.stdout?.on('data', (data: Buffer) => {
             const lines = stripClearCodes(data.toString()).trim().split('\n');
@@ -577,14 +612,15 @@ program
         }
 
         buildCount++;
-        logRaw(`\n\x1b[36m>>> Build #${buildCount} started\x1b[0m\n`);
+        setStatus(`build #${buildCount}`);
+        logRaw('');
 
         const plan = createBuildPlan(filteredAffected, graph.deps);
         const totalSteps = plan.waves.reduce((sum, w) => sum + w.length, 0);
 
         // Display affected dependencies graph
         logRaw('Affected dependencies:');
-        for (const proj of [...filteredAffected].sort()) {
+        for (const proj of [...filteredAffected].sort((a, b) => a.localeCompare(b))) {
           const deps = graph.deps.get(proj) || new Set();
           const affectedDeps = [...deps].filter(d => filteredAffected.has(d));
           if (affectedDeps.length > 0) {
@@ -598,7 +634,7 @@ program
         logRaw('Compilation plan:');
         let stepCounter = 0;
         for (let i = 0; i < plan.waves.length; i++) {
-          const wave = plan.waves[i];
+          const wave = plan.waves[i]!;
           const mode = wave.length > 1 ? 'parallel' : 'sequential';
           for (const proj of wave) {
             stepCounter++;
@@ -608,10 +644,10 @@ program
         logRaw('');
 
         // Run source generators for affected projects
-        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, log, taskLog);
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun ?? false, log, taskLog);
         if (!sourceResult.success) {
           log('Source generation failed');
-          logRaw(`\n\x1b[31m<<< Build #${buildCount} failed\x1b[0m\n`);
+          setStatus(`build #${buildCount} FAILED`);
           isBuilding = false;
           return;
         }
@@ -621,7 +657,7 @@ program
         if (plan.waves.length > 0) {
           const result = await executePlan(plan.waves, projects, root, {
             concurrency: parseInt(options.concurrency, 10),
-            dryRun: options.dryRun,
+            dryRun: options.dryRun ?? false,
             onStart: (info) => {
               const mode = info.isParallel ? 'parallel' : 'sequential';
               log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
@@ -634,12 +670,15 @@ program
           });
 
           if (result.success) {
-            logRaw(`\n\x1b[32m<<< Build #${buildCount} done\x1b[0m\n`);
+            setStatus(`build #${buildCount} done`);
+            log('Build complete');
           } else {
-            logRaw(`\n\x1b[31m<<< Build #${buildCount} failed\x1b[0m\n`);
+            setStatus(`build #${buildCount} FAILED`);
+            log('Build failed');
           }
         } else {
-          logRaw(`\n\x1b[32m<<< Build #${buildCount} done\x1b[0m\n`);
+          setStatus(`build #${buildCount} done`);
+          log('Build complete');
         }
 
         isBuilding = false;
@@ -653,7 +692,7 @@ program
 
       // Get configured source paths to ignore (prevents infinite loop when generators write files)
       const config = loadWorkgraphConfig(root);
-      const sourcePaths = Object.keys(config.sources || {}).map(p => `**/${p}/**`);
+      const sourcePaths = Object.keys(config.sources ?? {}).map(p => `**/${p}/**`);
 
       if (sourcePaths.length > 0) {
         log('Ignoring generated source paths (to prevent rebuild loops):');
@@ -666,9 +705,10 @@ program
         {
           root,
           debounceMs: parseInt(options.debounce, 10),
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises
           onChange: handleChanges,
           ignorePatterns: sourcePaths,
-          verbose: options.verbose,
+          verbose: options.verbose ?? false,
         },
         projects
       );

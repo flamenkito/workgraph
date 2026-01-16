@@ -43,7 +43,7 @@ export function planWaves(
     }
 
     // Sort wave for consistent output
-    wave.sort();
+    wave.sort((a, b) => a.localeCompare(b));
     waves.push(wave);
 
     // Remove wave from graph and update in-degrees
@@ -84,12 +84,12 @@ export function createBuildPlan(
 export function formatBuildPlan(plan: BuildPlan): string {
   const lines: string[] = [];
 
-  lines.push(`Affected: ${[...plan.affected].sort().join(', ')}`);
+  lines.push(`Affected: ${[...plan.affected].sort((a, b) => a.localeCompare(b)).join(', ')}`);
   lines.push('');
   lines.push('Build Plan:');
 
   for (let i = 0; i < plan.waves.length; i++) {
-    const wave = plan.waves[i];
+    const wave = plan.waves[i]!;
     const parallelNote = wave.length > 1 ? ' (parallel)' : '';
     lines.push(`  Wave ${i + 1}${parallelNote}: ${wave.join(', ')}`);
   }

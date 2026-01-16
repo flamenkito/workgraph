@@ -10,8 +10,8 @@ export async function loadWorkspaceProjects(root: string): Promise<Map<string, P
     throw new Error(`No package.json found at ${root}`);
   }
 
-  const rootPkg: PackageJson = JSON.parse(fs.readFileSync(rootPkgPath, 'utf-8'));
-  const workspacePatterns = rootPkg.workspaces || [];
+  const rootPkg = JSON.parse(fs.readFileSync(rootPkgPath, 'utf-8')) as PackageJson;
+  const workspacePatterns = rootPkg.workspaces ?? [];
 
   if (workspacePatterns.length === 0) {
     throw new Error('No workspaces defined in package.json');
@@ -35,7 +35,7 @@ export async function loadWorkspaceProjects(root: string): Promise<Map<string, P
         continue;
       }
 
-      const pkgJson: PackageJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
+      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8')) as PackageJson;
 
       if (!pkgJson.name) {
         continue;
@@ -86,4 +86,3 @@ export function getProjectFromPath(
 
   return longestMatch;
 }
-

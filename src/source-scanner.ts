@@ -3,6 +3,7 @@ import * as path from 'path';
 import { glob } from 'glob';
 import { Project, UnknownDependency, WorkgraphConfig } from './types';
 
+// eslint-disable-next-line sonarjs/slow-regex
 const IMPORT_REGEX = /(?:import|export)\s+(?:[\w{}\s*,]+\s+from\s+)?['"]([^'"]+)['"]/g;
 const REQUIRE_REGEX = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
@@ -62,13 +63,15 @@ function extractImports(content: string): string[] {
 
   let match;
   while ((match = IMPORT_REGEX.exec(content)) !== null) {
-    imports.push(match[1]);
+    const importPath = match[1];
+    if (importPath) imports.push(importPath);
   }
 
   IMPORT_REGEX.lastIndex = 0;
 
   while ((match = REQUIRE_REGEX.exec(content)) !== null) {
-    imports.push(match[1]);
+    const requirePath = match[1];
+    if (requirePath) imports.push(requirePath);
   }
 
   REQUIRE_REGEX.lastIndex = 0;
@@ -127,8 +130,9 @@ export function loadWorkgraphConfig(root: string): WorkgraphConfig {
     return {};
   }
 
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-  return pkg.workgraph || {};
+  // eslint-disable-next-line no-restricted-syntax
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { workgraph?: WorkgraphConfig };
+  return pkg.workgraph ?? {};
 }
 
 export function isPathInGitignore(filePath: string, root: string): boolean {
