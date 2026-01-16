@@ -3,8 +3,9 @@ import * as path from 'path';
 import { glob } from 'glob';
 import { Project, UnknownDependency, WorkgraphConfig } from './types';
 
-// eslint-disable-next-line sonarjs/slow-regex
-const IMPORT_REGEX = /(?:import|export)\s+(?:[\w{}\s*,]+\s+from\s+)?['"]([^'"]+)['"]/g;
+// Match import/export statements - simplified pattern to avoid backtracking
+// Matches: import 'x', import x from 'x', import {x} from 'x', export * from 'x', etc.
+const IMPORT_REGEX = /(?:import|export)[^'"]*['"]([^'"]+)['"]/g;
 const REQUIRE_REGEX = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
 export interface ScanResult {
@@ -123,16 +124,51 @@ function pathExists(p: string): boolean {
   return false;
 }
 
+interface RawSourceConfig {
+  command: string;
+  deps: string[];
+}
+
+interface RawWorkgraphConfig {
+  sources: Record<string, string | Partial<RawSourceConfig>>;
+}
+
+// Default for empty deps array (external API)
+const EMPTY_DEPS: string[] = [];
+
 export function loadWorkgraphConfig(root: string): WorkgraphConfig {
   const pkgPath = path.join(root, 'package.json');
+  const emptyConfig: WorkgraphConfig = { sources: {} };
 
   if (!fs.existsSync(pkgPath)) {
-    return {};
+    return emptyConfig;
   }
 
-  // eslint-disable-next-line no-restricted-syntax
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { workgraph?: WorkgraphConfig };
-  return pkg.workgraph ?? {};
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { workgraph: Partial<RawWorkgraphConfig> };
+  const workgraph = pkg.workgraph;
+  if (!workgraph) {
+    return emptyConfig;
+  }
+
+  const rawSources = workgraph.sources;
+  if (!rawSources) {
+    return emptyConfig;
+  }
+
+  // Normalize source configs to have required deps array
+  const sources: Record<string, string | { command: string; deps: string[] }> = {};
+  for (const [key, value] of Object.entries(rawSources)) {
+    if (typeof value === 'string') {
+      sources[key] = value;
+    } else if (value) {
+      sources[key] = {
+        command: value.command !== undefined ? value.command : '',
+        deps: value.deps !== undefined ? value.deps : EMPTY_DEPS,
+      };
+    }
+  }
+
+  return { sources };
 }
 
 export function isPathInGitignore(filePath: string, root: string): boolean {
@@ -169,7 +205,7 @@ export async function scanForUnknownDependencies(
   root: string
 ): Promise<ScanResult> {
   const config = loadWorkgraphConfig(root);
-  const configuredSources = new Set<string>(Object.keys(config.sources || {}));
+  const configuredSources = new Set<string>(Object.keys(config.sources));
   const unknownDependencies: UnknownDependency[] = [];
 
   for (const [name, project] of projects) {

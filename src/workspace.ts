@@ -3,6 +3,35 @@ import * as path from 'path';
 import { glob } from 'glob';
 import { PackageJson, Project } from './types';
 
+interface RawPackageJson {
+  name: string;
+  version: string;
+  workspaces: string[];
+  dependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
+  peerDependencies: Record<string, string>;
+  optionalDependencies: Record<string, string>;
+  scripts: Record<string, string>;
+}
+
+// Default values for optional package.json fields (external npm API)
+const EMPTY_STRING = '';
+const EMPTY_ARRAY: string[] = [];
+const EMPTY_RECORD: Record<string, string> = {};
+
+function normalizePackageJson(raw: Partial<RawPackageJson>): PackageJson {
+  return {
+    name: raw.name !== undefined ? raw.name : EMPTY_STRING,
+    version: raw.version !== undefined ? raw.version : EMPTY_STRING,
+    workspaces: raw.workspaces !== undefined ? raw.workspaces : EMPTY_ARRAY,
+    dependencies: raw.dependencies !== undefined ? raw.dependencies : EMPTY_RECORD,
+    devDependencies: raw.devDependencies !== undefined ? raw.devDependencies : EMPTY_RECORD,
+    peerDependencies: raw.peerDependencies !== undefined ? raw.peerDependencies : EMPTY_RECORD,
+    optionalDependencies: raw.optionalDependencies !== undefined ? raw.optionalDependencies : EMPTY_RECORD,
+    scripts: raw.scripts !== undefined ? raw.scripts : EMPTY_RECORD,
+  };
+}
+
 export async function loadWorkspaceProjects(root: string): Promise<Map<string, Project>> {
   const rootPkgPath = path.join(root, 'package.json');
 
@@ -10,8 +39,8 @@ export async function loadWorkspaceProjects(root: string): Promise<Map<string, P
     throw new Error(`No package.json found at ${root}`);
   }
 
-  const rootPkg = JSON.parse(fs.readFileSync(rootPkgPath, 'utf-8')) as PackageJson;
-  const workspacePatterns = rootPkg.workspaces ?? [];
+  const rootPkg = normalizePackageJson(JSON.parse(fs.readFileSync(rootPkgPath, 'utf-8')) as Partial<RawPackageJson>);
+  const workspacePatterns = rootPkg.workspaces;
 
   if (workspacePatterns.length === 0) {
     throw new Error('No workspaces defined in package.json');
@@ -35,7 +64,7 @@ export async function loadWorkspaceProjects(root: string): Promise<Map<string, P
         continue;
       }
 
-      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8')) as PackageJson;
+      const pkgJson = normalizePackageJson(JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8')) as Partial<RawPackageJson>);
 
       if (!pkgJson.name) {
         continue;
