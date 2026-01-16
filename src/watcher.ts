@@ -1,5 +1,5 @@
 import * as chokidar from 'chokidar';
-import { WatcherOptions, Project } from './types';
+import { Project } from './types';
 import { getProjectFromPath } from './workspace';
 
 const DEFAULT_IGNORE_PATTERNS = [
@@ -14,19 +14,19 @@ const DEFAULT_IGNORE_PATTERNS = [
   '**/.cache/**',
 ];
 
-const DEFAULT_DEBOUNCE_MS = 200;
+interface CreateWatcherOptions {
+  root: string;
+  onChange: (changedProjects: Set<string>, changedFiles: Map<string, string[]>) => void;
+  ignorePatterns: string[];
+  debounceMs: number;
+  verbose: boolean;
+}
 
 export function createWatcher(
-  options: WatcherOptions,
+  options: CreateWatcherOptions,
   projects: Map<string, Project>
 ): chokidar.FSWatcher {
-  const {
-    root,
-    ignorePatterns = [],
-    debounceMs = DEFAULT_DEBOUNCE_MS,
-    verbose = false,
-    onChange,
-  } = options;
+  const { root, ignorePatterns, debounceMs, verbose, onChange } = options;
 
   const allIgnorePatterns = [...DEFAULT_IGNORE_PATTERNS, ...ignorePatterns];
 

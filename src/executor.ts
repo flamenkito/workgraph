@@ -6,19 +6,17 @@ const DEFAULT_CONCURRENCY = Math.max(1, os.cpus().length - 1);
 
 export function defaultBuildCommand(project: Project): string {
   const scripts = project.packageJson.scripts;
-  if (scripts?.['build']) {
+  if (scripts['build']) {
     return `npm run build -w ${project.name}`;
   }
   return `echo "No build script for ${project.name}"`;
 }
 
-/* eslint-disable no-restricted-syntax */
 async function runCommand(
   command: string,
   cwd: string,
-  onOutput?: (line: string) => void
-): Promise<{ success: boolean; output: string; error?: string }> {
-/* eslint-enable no-restricted-syntax */
+  onOutput: ((line: string) => void) | undefined
+): Promise<{ success: boolean; output: string; error: string }> {
   return new Promise((resolve) => {
     const parts = command.split(' ');
     const cmd = parts[0];
@@ -27,7 +25,7 @@ async function runCommand(
       return;
     }
     const args = parts.slice(1);
-    // eslint-disable-next-line sonarjs/os-command
+    // eslint-disable-next-line sonarjs/os-command -- build tool: executes package.json build scripts
     const proc = spawn(cmd, args, {
       cwd,
       shell: true,
@@ -61,7 +59,7 @@ async function runCommand(
       resolve({
         success: code === 0,
         output: stdout,
-        ...(stderr ? { error: stderr } : {}),
+        error: stderr,
       });
     });
 
@@ -100,20 +98,20 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
+const noop = (): void => {};
+
 export async function executePlan(
   waves: string[][],
   projects: Map<string, Project>,
   root: string,
-  options: ExecutorOptions = {}
+  options: Partial<ExecutorOptions> = {}
 ): Promise<BuildResult> {
-  const {
-    concurrency = DEFAULT_CONCURRENCY,
-    buildCommand = defaultBuildCommand,
-    dryRun = false,
-    onStart,
-    onComplete,
-    onOutput,
-  } = options;
+  const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
+  const buildCommand = options.buildCommand ?? defaultBuildCommand;
+  const dryRun = options.dryRun ?? false;
+  const onStart = options.onStart ?? noop;
+  const onComplete = options.onComplete ?? noop;
+  const onOutput = options.onOutput;
 
   const startTime = Date.now();
   const results: ProjectBuildResult[] = [];
@@ -135,6 +133,7 @@ export async function executePlan(
             project: projectName,
             success: false,
             duration: 0,
+            output: '',
             error: 'Project not found',
           };
         }
@@ -148,7 +147,7 @@ export async function executePlan(
           totalSteps,
           isParallel,
         };
-        onStart?.(stepInfo);
+        onStart(stepInfo);
 
         const cmd = buildCommand(project);
         if (onOutput) {
@@ -165,6 +164,7 @@ export async function executePlan(
             success: true,
             duration: 0,
             output: `[dry-run] Would run: ${cmd}`,
+            error: '',
           };
         }
 
@@ -176,10 +176,10 @@ export async function executePlan(
           success: result.success,
           duration,
           output: result.output,
-          ...(result.error ? { error: result.error } : {}),
+          error: result.error,
         };
 
-        onComplete?.(buildResult);
+        onComplete(buildResult);
 
         if (!result.success) {
           overallSuccess = false;

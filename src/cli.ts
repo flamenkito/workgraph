@@ -34,22 +34,22 @@ interface BuildCommandOptions {
   root: string;
   changed: string[];
   concurrency: string;
-  dryRun: boolean | undefined;
+  dryRun: boolean;
 }
 
 interface WatchCommandOptions {
   root: string;
   concurrency: string;
   debounce: string;
-  dryRun: boolean | undefined;
-  filter: string | undefined;
-  verbose: boolean | undefined;
+  dryRun: boolean;
+  filter: string;
+  verbose: boolean;
   ui: boolean;
 }
 
 function normalizeSourceConfig(config: string | SourceConfig): SourceConfig {
   if (typeof config === 'string') {
-    return { command: config };
+    return { command: config, deps: [] };
   }
   return config;
 }
@@ -62,7 +62,7 @@ function shouldRunGenerator(
   root: string
 ): boolean {
   // Check if any dep project is affected
-  if (sourceConfig.deps && sourceConfig.deps.length > 0) {
+  if (sourceConfig.deps.length > 0) {
     for (const dep of sourceConfig.deps) {
       // Try exact match first
       if (affectedProjects.has(dep)) {
@@ -103,7 +103,7 @@ async function runSourceGeneratorsWithUI(
   taskLog: (msg: string) => void = console.log
 ): Promise<{ success: boolean; generated: string[] }> {
   const config = loadWorkgraphConfig(root);
-  const sources = config.sources ?? {};
+  const sources = config.sources;
   const generated: string[] = [];
 
   for (const [sourcePath, rawConfig] of Object.entries(sources)) {
@@ -123,7 +123,7 @@ async function runSourceGeneratorsWithUI(
 
     try {
       const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
-        // eslint-disable-next-line sonarjs/os-command
+        // eslint-disable-next-line sonarjs/os-command -- build tool: runs user-configured source generators
         const proc = spawn(sourceConfig.command, {
           cwd: root,
           shell: true,
@@ -230,7 +230,7 @@ program
         console.log('Configured sources:');
         const config = loadWorkgraphConfig(root);
         for (const sourcePath of result.configuredSources) {
-          const sourceConfig = config.sources?.[sourcePath];
+          const sourceConfig = config.sources[sourcePath];
           if (!sourceConfig) continue;
           const command = typeof sourceConfig === 'string' ? sourceConfig : sourceConfig.command;
           console.log(`  ${sourcePath}`);
@@ -307,7 +307,11 @@ program
   )
   .option('--concurrency <number>', 'Max parallel builds', String(4))
   .option('--dry-run', 'Show what would be built without executing')
-  .action(async (options: BuildCommandOptions) => {
+  .action(async (rawOptions: Partial<BuildCommandOptions> & { root: string; changed: string[]; concurrency: string }) => {
+    const options: BuildCommandOptions = {
+      ...rawOptions,
+      dryRun: rawOptions.dryRun === true,
+    };
     try {
       const root = path.resolve(options.root);
       const projects = await loadWorkspaceProjects(root);
@@ -339,7 +343,7 @@ program
       }
 
       // Run source generators before build
-      const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun ?? false);
+      const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun);
       if (!sourceResult.success) {
         console.error('Source generation failed, aborting build');
         process.exit(1);
@@ -350,18 +354,18 @@ program
 
       const result = await executePlan(plan.waves, projects, root, {
         concurrency: parseInt(options.concurrency, 10),
-        dryRun: options.dryRun ?? false,
+        dryRun: options.dryRun,
         onStart: (info) => {
           const mode = info.isParallel ? 'parallel' : 'sequential';
           console.log(`[${formatTimestamp()}] Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
         },
-        onComplete: (result) => {
-          const status = result.success ? 'done' : 'FAILED';
+        onComplete: (buildResult) => {
+          const status = buildResult.success ? 'done' : 'FAILED';
           console.log(
-            `[${formatTimestamp()}] ${result.project}: ${status} (${result.duration}ms)`
+            `[${formatTimestamp()}] ${buildResult.project}: ${status} (${buildResult.duration}ms)`
           );
-          if (!result.success && result.error) {
-            console.error(result.error);
+          if (!buildResult.success && buildResult.error) {
+            console.error(buildResult.error);
           }
         },
       });
@@ -390,7 +394,13 @@ program
   .option('--filter <pattern>', 'Only build projects matching pattern (e.g., "libs/*")')
   .option('--verbose', 'Show detailed watcher and build output')
   .option('--no-ui', 'Disable split-screen UI')
-  .action(async (apps: string[], options: WatchCommandOptions) => {
+  .action(async (apps: string[], rawOptions: Partial<WatchCommandOptions> & { root: string; concurrency: string; debounce: string; ui: boolean }) => {
+    const options: WatchCommandOptions = {
+      ...rawOptions,
+      dryRun: rawOptions.dryRun === true,
+      filter: rawOptions.filter !== undefined ? rawOptions.filter : '',
+      verbose: rawOptions.verbose === true,
+    };
     try {
       const root = path.resolve(options.root);
       const projects = await loadWorkspaceProjects(root);
@@ -430,11 +440,11 @@ program
         // Get all dependencies of the apps (not the apps themselves)
         const depsToBuilt = new Set<string>();
         for (const appName of resolvedApps) {
-          const appDeps = graph.deps.get(appName) || new Set();
+          const appDeps = graph.deps.get(appName) ?? new Set<string>();
           for (const dep of appDeps) {
             depsToBuilt.add(dep);
             // Also add transitive dependencies
-            const transitiveDeps = graph.deps.get(dep) || new Set();
+            const transitiveDeps = graph.deps.get(dep) ?? new Set<string>();
             for (const td of transitiveDeps) {
               depsToBuilt.add(td);
             }
@@ -450,7 +460,7 @@ program
           if (plan.waves.length > 0) {
             const result = await executePlan(plan.waves, projects, root, {
               concurrency: parseInt(options.concurrency, 10),
-              dryRun: options.dryRun ?? false,
+              dryRun: options.dryRun,
               onStart: (info) => {
                 const mode = info.isParallel ? 'parallel' : 'sequential';
                 log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
@@ -477,7 +487,7 @@ program
         const affected = new Set([...resolvedApps, ...depsToBuilt]);
 
         // Run source generators after dependencies are built
-        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun ?? false, log, taskLog);
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, log, taskLog);
         if (!sourceResult.success) {
           log('Source generation failed, continuing anyway...');
         }
@@ -486,7 +496,7 @@ program
           const project = projects.get(appName);
           if (!project) continue;
 
-          const hasDevScript = project.packageJson.scripts?.['dev'];
+          const hasDevScript = project.packageJson.scripts['dev'];
           if (!hasDevScript) {
             log(`Warning: ${appName} has no dev script, skipping`);
             continue;
@@ -496,7 +506,7 @@ program
           log(`Starting dev server: ${appName}`);
           taskLog(`\x1b[33m$ ${devCmd}\x1b[0m`);
 
-          // eslint-disable-next-line sonarjs/no-os-command-from-path
+          // eslint-disable-next-line sonarjs/no-os-command-from-path -- build tool: npm must be resolved from PATH
           const proc = spawn('npm', ['run', 'dev', '-w', appName], {
             cwd: root,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -621,7 +631,7 @@ program
         // Display affected dependencies graph
         logRaw('Affected dependencies:');
         for (const proj of [...filteredAffected].sort((a, b) => a.localeCompare(b))) {
-          const deps = graph.deps.get(proj) || new Set();
+          const deps = graph.deps.get(proj) ?? new Set<string>();
           const affectedDeps = [...deps].filter(d => filteredAffected.has(d));
           if (affectedDeps.length > 0) {
             logRaw(`  ${proj} -> ${affectedDeps.join(', ')}`);
@@ -644,7 +654,7 @@ program
         logRaw('');
 
         // Run source generators for affected projects
-        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun ?? false, log, taskLog);
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, log, taskLog);
         if (!sourceResult.success) {
           log('Source generation failed');
           setStatus(`build #${buildCount} FAILED`);
@@ -657,7 +667,7 @@ program
         if (plan.waves.length > 0) {
           const result = await executePlan(plan.waves, projects, root, {
             concurrency: parseInt(options.concurrency, 10),
-            dryRun: options.dryRun ?? false,
+            dryRun: options.dryRun,
             onStart: (info) => {
               const mode = info.isParallel ? 'parallel' : 'sequential';
               log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
@@ -692,7 +702,7 @@ program
 
       // Get configured source paths to ignore (prevents infinite loop when generators write files)
       const config = loadWorkgraphConfig(root);
-      const sourcePaths = Object.keys(config.sources ?? {}).map(p => `**/${p}/**`);
+      const sourcePaths = Object.keys(config.sources).map(p => `**/${p}/**`);
 
       if (sourcePaths.length > 0) {
         log('Ignoring generated source paths (to prevent rebuild loops):');
@@ -705,10 +715,11 @@ program
         {
           root,
           debounceMs: parseInt(options.debounce, 10),
-          // eslint-disable-next-line @typescript-eslint/no-misused-promises
-          onChange: handleChanges,
+          onChange: (changedProjects, changedFiles) => {
+            void handleChanges(changedProjects, changedFiles);
+          },
           ignorePatterns: sourcePaths,
-          verbose: options.verbose ?? false,
+          verbose: options.verbose,
         },
         projects
       );
