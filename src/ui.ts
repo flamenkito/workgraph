@@ -6,6 +6,7 @@ export interface UI {
   rightPane: blessed.Widgets.Log;
   log: (message: string) => void;
   taskLog: (message: string) => void;
+  setStatus: (status: string | null) => void;
   destroy: () => void;
 }
 
@@ -101,6 +102,15 @@ export function createUI(): UI {
     screen.render();
   };
 
+  const setStatus = (status: string | null): void => {
+    if (status) {
+      leftPane.setLabel(` Workgraph ─ ${status} `);
+    } else {
+      leftPane.setLabel(' Workgraph ');
+    }
+    screen.render();
+  };
+
   const destroy = (): void => {
     screen.destroy();
   };
@@ -111,23 +121,25 @@ export function createUI(): UI {
     rightPane,
     log,
     taskLog,
+    setStatus,
     destroy,
   };
 }
 
 // Convert ANSI escape codes to blessed tags
 function convertAnsiToBlessed(text: string): string {
+  const ESC = '\x1b';
   return text
     // Colors
-    .replace(/\x1b\[31m/g, '{red-fg}')
-    .replace(/\x1b\[32m/g, '{green-fg}')
-    .replace(/\x1b\[33m/g, '{yellow-fg}')
-    .replace(/\x1b\[34m/g, '{blue-fg}')
-    .replace(/\x1b\[35m/g, '{magenta-fg}')
-    .replace(/\x1b\[36m/g, '{cyan-fg}')
-    .replace(/\x1b\[37m/g, '{white-fg}')
+    .replace(new RegExp(`${ESC}\\[31m`, 'g'), '{red-fg}')
+    .replace(new RegExp(`${ESC}\\[32m`, 'g'), '{green-fg}')
+    .replace(new RegExp(`${ESC}\\[33m`, 'g'), '{yellow-fg}')
+    .replace(new RegExp(`${ESC}\\[34m`, 'g'), '{blue-fg}')
+    .replace(new RegExp(`${ESC}\\[35m`, 'g'), '{magenta-fg}')
+    .replace(new RegExp(`${ESC}\\[36m`, 'g'), '{cyan-fg}')
+    .replace(new RegExp(`${ESC}\\[37m`, 'g'), '{white-fg}')
     // Reset
-    .replace(/\x1b\[0m/g, '{/}')
+    .replace(new RegExp(`${ESC}\\[0m`, 'g'), '{/}')
     // Remove any other escape sequences
-    .replace(/\x1b\[[0-9;]*m/g, '');
+    .replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '');
 }

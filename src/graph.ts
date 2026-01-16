@@ -89,7 +89,7 @@ export function formatGraph(graph: DependencyGraph): string {
     if (projectDeps.size === 0) {
       lines.push('    (no dependencies)');
     } else {
-      for (const dep of [...projectDeps].sort()) {
+      for (const dep of [...projectDeps].sort((a, b) => a.localeCompare(b))) {
         lines.push(`    -> ${dep}`);
       }
     }

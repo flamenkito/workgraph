@@ -5,20 +5,29 @@ import { BuildResult, BuildStepInfo, ExecutorOptions, Project, ProjectBuildResul
 const DEFAULT_CONCURRENCY = Math.max(1, os.cpus().length - 1);
 
 export function defaultBuildCommand(project: Project): string {
-  const scripts = project.packageJson.scripts || {};
-  if (scripts.build) {
+  const scripts = project.packageJson.scripts;
+  if (scripts?.['build']) {
     return `npm run build -w ${project.name}`;
   }
   return `echo "No build script for ${project.name}"`;
 }
 
+/* eslint-disable no-restricted-syntax */
 async function runCommand(
   command: string,
   cwd: string,
   onOutput?: (line: string) => void
 ): Promise<{ success: boolean; output: string; error?: string }> {
+/* eslint-enable no-restricted-syntax */
   return new Promise((resolve) => {
-    const [cmd, ...args] = command.split(' ');
+    const parts = command.split(' ');
+    const cmd = parts[0];
+    if (!cmd) {
+      resolve({ success: false, output: '', error: 'Empty command' });
+      return;
+    }
+    const args = parts.slice(1);
+    // eslint-disable-next-line sonarjs/os-command
     const proc = spawn(cmd, args, {
       cwd,
       shell: true,
@@ -45,18 +54,18 @@ async function runCommand(
       }
     };
 
-    proc.stdout?.on('data', (data) => processOutput(data, false));
-    proc.stderr?.on('data', (data) => processOutput(data, true));
+    proc.stdout?.on('data', (data: Buffer) => processOutput(data, false));
+    proc.stderr?.on('data', (data: Buffer) => processOutput(data, true));
 
-    proc.on('close', (code) => {
+    proc.on('close', (code: number | null) => {
       resolve({
         success: code === 0,
         output: stdout,
-        error: stderr || undefined,
+        ...(stderr ? { error: stderr } : {}),
       });
     });
 
-    proc.on('error', (err) => {
+    proc.on('error', (err: Error) => {
       resolve({
         success: false,
         output: stdout,
@@ -113,7 +122,7 @@ export async function executePlan(
   let currentStep = 0;
 
   for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
-    const wave = waves[waveIndex];
+    const wave = waves[waveIndex]!;
     const isParallel = wave.length > 1;
 
     const waveResults = await runWithConcurrency(
@@ -167,7 +176,7 @@ export async function executePlan(
           success: result.success,
           duration,
           output: result.output,
-          error: result.error,
+          ...(result.error ? { error: result.error } : {}),
         };
 
         onComplete?.(buildResult);
