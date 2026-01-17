@@ -1,6 +1,6 @@
 # workgraph
 
-Workspace dependency analyzer and parallel build orchestrator for npm/yarn/pnpm monorepos.
+Workspace dependency analyzer and parallel build orchestrator for monorepos.
 
 ## Features
 
