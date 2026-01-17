@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { spawn, spawnSync, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import { loadWorkspaceProjects } from './workspace';
 import { buildGraph, detectCycles, formatGraph } from './graph';
@@ -418,6 +418,8 @@ program
       const logRaw = ui ? (msg: string) => ui.leftPane.log(msg) : (msg: string) => console.log(msg);
       const taskLog = ui ? ui.taskLog : (msg: string) => console.log(msg);
       const setStatus = ui ? ui.setStatus : () => {};
+      const addTask = ui ? ui.addTask : () => {};
+      const updateTask = ui ? ui.updateTask : () => {};
 
       // Start dev servers for specified apps
       const devProcesses: { proc: ChildProcess; name: string; command: string }[] = [];
@@ -428,37 +430,42 @@ program
           ui.destroy();
         }
 
-        // Collect kill results
-        const results: string[] = [];
-        results.push('Cleaning up dev servers...');
+        // ANSI color codes
+        const dim = '\x1b[2m';
+        const green = '\x1b[32m';
+        const red = '\x1b[31m';
+        const reset = '\x1b[0m';
+
+        // Reset terminal using ANSI escape sequences (clear screen + move cursor home)
+        process.stdout.write('\x1b[2J\x1b[H');
+
+        const output: string[] = [''];
 
         // Kill all dev server process groups with SIGKILL for immediate termination
-        for (const { proc, name, command } of devProcesses) {
-          if (proc.pid) {
-            results.push(`Killing: pid=${proc.pid}, name=${name}, command="${command}"`);
-            try {
-              process.kill(-proc.pid, 'SIGKILL');
-              results.push(`  -> Killed process group -${proc.pid}`);
-            } catch (err) {
-              results.push(`  -> Failed to kill group: ${(err as Error).message}`);
+        if (devProcesses.length > 0) {
+          output.push(`${dim}Stopping ${devProcesses.length} dev server(s)${reset}`);
+          for (const { proc, name } of devProcesses) {
+            if (proc.pid) {
+              const shortName = name.includes('/') ? name.split('/').pop() : name;
               try {
-                process.kill(proc.pid, 'SIGKILL');
-                results.push(`  -> Killed process ${proc.pid}`);
-              } catch (err2) {
-                results.push(`  -> Failed to kill process: ${(err2 as Error).message}`);
+                process.kill(-proc.pid, 'SIGKILL');
+                output.push(`  ${green}✓${reset} ${shortName}`);
+              } catch {
+                try {
+                  process.kill(proc.pid, 'SIGKILL');
+                  output.push(`  ${green}✓${reset} ${shortName}`);
+                } catch {
+                  output.push(`  ${red}✗${reset} ${shortName} ${dim}(already stopped)${reset}`);
+                }
               }
             }
           }
         }
 
-        results.push('Cleanup complete.');
+        output.push('');
 
-        // Use separate process to print after blessed cleanup
-        spawnSync('echo', [''], { stdio: 'inherit' });
-        spawnSync('echo', ['Bye bye workgraph...'], { stdio: 'inherit' });
-        for (const line of results) {
-          spawnSync('echo', [line], { stdio: 'inherit' });
-        }
+        // Print output directly to stdout
+        process.stdout.write(output.join('\n'));
 
         process.exit(0);
       };
@@ -500,10 +507,13 @@ program
               onStart: (info) => {
                 const mode = info.isParallel ? 'parallel' : 'sequential';
                 log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
+                const shortName = info.project.includes('/') ? info.project.split('/').pop() : info.project;
+                addTask({ id: `build-${info.project}`, name: `build:${shortName}`, pid: 0, status: 'running' });
               },
               onComplete: (buildResult) => {
                 const status = buildResult.success ? 'done' : 'FAILED';
                 log(`${buildResult.project}: ${status} (${buildResult.duration}ms)`);
+                updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error');
                 if (!buildResult.success && buildResult.error) {
                   taskLog(buildResult.error);
                 }
@@ -551,6 +561,13 @@ program
 
           const shortName = appName.includes('/') ? appName.split('/').pop() : appName;
           const prefix = `[${shortName}]`;
+          const taskId = `dev-${appName}`;
+
+          // Add task to UI (pid is always defined after successful spawn)
+          if (!proc.pid) {
+            throw new Error(`Failed to start dev server for ${appName}: no pid`);
+          }
+          addTask({ id: taskId, name: shortName ?? appName, pid: proc.pid, status: 'running' });
 
           // Strip console clear escape sequences
           const ESC = '\x1b';
@@ -573,6 +590,7 @@ program
 
           proc.on('close', (code) => {
             log(`${prefix} exited with code ${code}`);
+            updateTask(taskId, code === 0 ? 'stopped' : 'error');
           });
 
           devProcesses.push({ proc, name: appName, command: devCmd });
@@ -697,11 +715,14 @@ program
             onStart: (info) => {
               const mode = info.isParallel ? 'parallel' : 'sequential';
               log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
+              const shortName = info.project.includes('/') ? info.project.split('/').pop() : info.project;
+              addTask({ id: `build-${info.project}`, name: `build:${shortName}`, pid: 0, status: 'running' });
             },
             onOutput: taskLog,
             onComplete: (buildResult) => {
               const status = buildResult.success ? 'done' : 'FAILED';
               log(`${buildResult.project}: ${status} (${buildResult.duration}ms)`);
+              updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error');
             },
           });
 
