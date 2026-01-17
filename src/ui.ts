@@ -1,12 +1,23 @@
 import * as blessed from 'blessed';
 
+export interface RunningTask {
+  id: string;
+  name: string;
+  pid: number;
+  status: 'running' | 'stopped' | 'error';
+}
+
 export interface UI {
   screen: blessed.Widgets.Screen;
+  tasksPane: blessed.Widgets.BoxElement;
   leftPane: blessed.Widgets.Log;
   rightPane: blessed.Widgets.Log;
   log: (message: string) => void;
   taskLog: (message: string) => void;
   setStatus: (status: string | null) => void;
+  addTask: (task: RunningTask) => void;
+  updateTask: (id: string, status: RunningTask['status']) => void;
+  removeTask: (id: string) => void;
   destroy: () => void;
 }
 
@@ -16,13 +27,59 @@ export function createUI(): UI {
     title: 'Workgraph',
   });
 
-  // Left pane - workgraph status
+  // Tasks pane - running tasks list (leftmost)
+  const tasksPane = blessed.box({
+    parent: screen,
+    label: ' Tasks ',
+    left: 0,
+    top: 0,
+    width: '15%',
+    height: '100%',
+    border: { type: 'line' },
+    style: {
+      border: { fg: 'green' },
+      label: { fg: 'green', bold: true },
+    },
+    padding: { left: 1 },
+    tags: true,
+  });
+
+  // Track running tasks
+  const tasks: Map<string, RunningTask> = new Map();
+
+  const renderTasks = (): void => {
+    const lines: string[] = [];
+    for (const task of tasks.values()) {
+      let statusIcon: string;
+      let statusColor: string;
+      switch (task.status) {
+        case 'running':
+          statusIcon = '●';
+          statusColor = 'green';
+          break;
+        case 'stopped':
+          statusIcon = '○';
+          statusColor = 'gray';
+          break;
+        case 'error':
+          statusIcon = '✖';
+          statusColor = 'red';
+          break;
+      }
+      const pidStr = task.pid > 0 ? ` {gray-fg}${task.pid}{/}` : '';
+      lines.push(`{${statusColor}-fg}${statusIcon}{/} ${task.name}${pidStr}`);
+    }
+    tasksPane.setContent(lines.join('\n'));
+    screen.render();
+  };
+
+  // Middle pane - workgraph status
   const leftPane = blessed.log({
     parent: screen,
     label: ' Workgraph ',
-    left: 0,
+    left: '15%',
     top: 0,
-    width: '50%',
+    width: '40%',
     height: '100%',
     border: { type: 'line' },
     style: {
@@ -44,9 +101,9 @@ export function createUI(): UI {
   const rightPane = blessed.log({
     parent: screen,
     label: ' Task Output ',
-    left: '50%',
+    left: '55%',
     top: 0,
-    width: '50%',
+    width: '45%',
     height: '100%',
     border: { type: 'line' },
     style: {
@@ -70,14 +127,21 @@ export function createUI(): UI {
   });
 
   // Tab to switch focus between panes
-  let focusedPane: 'left' | 'right' = 'left';
+  let focusedPane: 'tasks' | 'left' | 'right' = 'left';
   screen.key(['tab'], () => {
-    if (focusedPane === 'left') {
-      rightPane.focus();
-      focusedPane = 'right';
-    } else {
-      leftPane.focus();
-      focusedPane = 'left';
+    switch (focusedPane) {
+      case 'tasks':
+        leftPane.focus();
+        focusedPane = 'left';
+        break;
+      case 'left':
+        rightPane.focus();
+        focusedPane = 'right';
+        break;
+      case 'right':
+        tasksPane.focus();
+        focusedPane = 'tasks';
+        break;
     }
     screen.render();
   });
@@ -114,13 +178,35 @@ export function createUI(): UI {
     screen.destroy();
   };
 
+  const addTask = (task: RunningTask): void => {
+    tasks.set(task.id, task);
+    renderTasks();
+  };
+
+  const updateTask = (id: string, status: RunningTask['status']): void => {
+    const task = tasks.get(id);
+    if (task) {
+      task.status = status;
+      renderTasks();
+    }
+  };
+
+  const removeTask = (id: string): void => {
+    tasks.delete(id);
+    renderTasks();
+  };
+
   return {
     screen,
+    tasksPane,
     leftPane,
     rightPane,
     log,
     taskLog,
     setStatus,
+    addTask,
+    updateTask,
+    removeTask,
     destroy,
   };
 }
