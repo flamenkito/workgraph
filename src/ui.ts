@@ -16,7 +16,7 @@ export interface UI {
   taskLog: (message: string) => void;
   setStatus: (status: string | null) => void;
   addTask: (task: RunningTask) => void;
-  updateTask: (id: string, status: RunningTask['status']) => void;
+  updateTask: (id: string, status: RunningTask['status'], removeAfterMs?: number) => void;
   removeTask: (id: string) => void;
   destroy: () => void;
 }
@@ -183,11 +183,16 @@ export function createUI(): UI {
     renderTasks();
   };
 
-  const updateTask = (id: string, status: RunningTask['status']): void => {
+  const updateTask = (id: string, status: RunningTask['status'], removeAfterMs?: number): void => {
     const task = tasks.get(id);
     if (task) {
       task.status = status;
       renderTasks();
+      if (removeAfterMs !== undefined && removeAfterMs > 0) {
+        setTimeout(() => {
+          removeTask(id);
+        }, removeAfterMs);
+      }
     }
   };
 
