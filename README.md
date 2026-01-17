@@ -12,16 +12,17 @@ Workspace dependency analyzer and parallel build orchestrator for npm/yarn/pnpm 
 - **Dev Server Management** - Start and manage multiple dev servers with prefixed output
 - **Concurrent Execution** - Executes builds with configurable concurrency limits
 - **Source Generation** - Automatically run code generators for missing/generated sources
+- **Terminal UI** - Split-screen interface with tasks panel, build logs, and task output
 
-## Installation
+## Usage
+
+Run directly with npx:
 
 ```bash
-npm install -g workgraph
-# or
-npm install -D workgraph
+npx workgraph <command>
 ```
 
-## CLI Usage
+## CLI Commands
 
 ### Analyze Dependencies
 
@@ -160,17 +161,35 @@ workgraph watch --dry-run
 workgraph watch --filter 'libs/*' api web
 ```
 
-Output:
+### Terminal UI
+
+Watch mode displays a 3-panel terminal interface:
+
 ```
-Starting dev server: @myorg/api
-Starting dev server: @myorg/web
+┌─ Tasks ─────┬─ Workgraph ──────────────┬─ Task Output ──────────────┐
+│ ● api 12345 │ [14:32:01] Watching...   │ [api] Server started       │
+│ ● web 12346 │ [14:32:05] Building auth │ [web] Compiled successfully│
+│ ○ build:auth│ [14:32:06] auth: done    │                            │
+└─────────────┴──────────────────────────┴────────────────────────────┘
+```
 
-Watching 7 projects for changes...
-Building only projects matching: libs/* (4 projects)
-Press Ctrl+C to stop
+**Panels:**
+- **Tasks** - Running processes with status icons and PIDs
+- **Workgraph** - Build logs with timestamps
+- **Task Output** - Dev server and build output
 
-[api] [Nest] Starting Nest application...
-[web] ➜ Local: http://localhost:3000
+**Task Status Icons:**
+- `●` green - Running
+- `○` gray - Stopped
+- `✖` red - Error
+
+**Navigation:**
+- `Tab` - Switch focus between panels
+- `Ctrl+C` - Stop all processes and exit
+
+To disable the UI and use plain console output:
+```bash
+workgraph watch --no-ui
 ```
 
 ## CLI Options
@@ -179,10 +198,12 @@ Press Ctrl+C to stop
 |--------|-------------|---------|
 | `-r, --root <path>` | Workspace root directory | `process.cwd()` |
 | `-c, --changed <projects...>` | Changed projects (names or paths) | `[]` |
-| `--concurrency <number>` | Max parallel builds | CPU count - 1 |
+| `--concurrency <number>` | Max parallel builds | `4` |
 | `--debounce <ms>` | Debounce time for watch mode | `200` |
 | `--dry-run` | Show plan without executing | `false` |
 | `--filter <pattern>` | Only build projects matching pattern (e.g., `libs/*`) | - |
+| `--no-ui` | Disable split-screen terminal UI (watch mode) | `false` |
+| `--verbose` | Show detailed watcher output | `false` |
 
 ## Source Generation
 
@@ -196,15 +217,41 @@ Add `workgraph.sources` to your root `package.json`:
 {
   "workgraph": {
     "sources": {
-      "apps/web-angular/src/generated": "npx exposify-codegen api -o ./apps/web-angular/src/generated"
+      "apps/web-angular/src/generated": {
+        "command": "npx exposify-codegen api --output ./apps/web-angular/src/generated --target angular",
+        "deps": ["api"]
+      },
+      "apps/web-preact/src/generated": {
+        "command": "npx exposify-codegen api --output ./apps/web-preact/src/generated --target preact",
+        "deps": ["api"]
+      }
     }
   }
 }
 ```
 
+You can also use the shorthand string format for simple generators:
+
+```json
+{
+  "workgraph": {
+    "sources": {
+      "libs/types/src/generated": "npx generate-types"
+    }
+  }
+}
+```
+
+### Configuration Options
+
+| Field | Description |
+|-------|-------------|
+| `command` | The shell command to run for generation |
+| `deps` | Array of project names/paths that trigger this generator when changed |
+
 ### How It Works
 
-1. When `build` or `watch` runs, workgraph checks if any affected project uses a configured source path
+1. When `build` or `watch` runs, workgraph checks if any affected project matches a generator's `deps`
 2. If so, the source generation command runs **before** the build
 3. This ensures generated code is up-to-date before compilation
 
