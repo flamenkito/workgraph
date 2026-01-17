@@ -94,14 +94,26 @@ function shouldRunGenerator(
   return false;
 }
 
+interface SourceGeneratorCallbacks {
+  log: (msg: string) => void;
+  taskLog: (msg: string) => void;
+  addTask: (task: { id: string; name: string; pid: number; status: 'running' | 'stopped' | 'error' }) => void;
+  updateTask: (id: string, status: 'running' | 'stopped' | 'error', removeAfterMs?: number) => void;
+}
+
 async function runSourceGeneratorsWithUI(
   root: string,
   affectedProjects: Set<string>,
   projects: Map<string, Project>,
   dryRun: boolean = false,
-  log: (msg: string) => void = (msg) => console.log(`[${formatTimestamp()}] ${msg}`),
-  taskLog: (msg: string) => void = console.log
+  callbacks: SourceGeneratorCallbacks = {
+    log: (msg) => console.log(`[${formatTimestamp()}] ${msg}`),
+    taskLog: console.log,
+    addTask: () => {},
+    updateTask: () => {},
+  }
 ): Promise<{ success: boolean; generated: string[] }> {
+  const { log, taskLog, addTask, updateTask } = callbacks;
   const config = loadWorkgraphConfig(root);
   const sources = config.sources;
   const generated: string[] = [];
@@ -112,6 +124,8 @@ async function runSourceGeneratorsWithUI(
     if (!shouldRunGenerator(sourcePath, sourceConfig, affectedProjects, projects, root)) {
       continue;
     }
+
+    const taskId = `gen-${sourcePath}`;
 
     log(`Generating: ${sourcePath}`);
     taskLog(`\x1b[33m$ ${sourceConfig.command}\x1b[0m`);
@@ -130,6 +144,10 @@ async function runSourceGeneratorsWithUI(
           stdio: 'pipe',
         });
 
+        if (proc.pid) {
+          addTask({ id: taskId, name: `gen:${sourcePath}`, pid: proc.pid, status: 'running' });
+        }
+
         let output = '';
         proc.stdout?.on('data', (data: Buffer) => {
           const text = data.toString();
@@ -147,10 +165,12 @@ async function runSourceGeneratorsWithUI(
         });
 
         proc.on('close', (code) => {
+          updateTask(taskId, code === 0 ? 'stopped' : 'error', 2000);
           resolve({ success: code === 0, output });
         });
 
         proc.on('error', (err) => {
+          updateTask(taskId, 'error', 2000);
           resolve({ success: false, output: err.message });
         });
       });
@@ -513,7 +533,7 @@ program
               onComplete: (buildResult) => {
                 const status = buildResult.success ? 'done' : 'FAILED';
                 log(`${buildResult.project}: ${status} (${buildResult.duration}ms)`);
-                updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error');
+                updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error', 2000);
                 if (!buildResult.success && buildResult.error) {
                   taskLog(buildResult.error);
                 }
@@ -533,7 +553,7 @@ program
         const affected = new Set([...resolvedApps, ...depsToBuilt]);
 
         // Run source generators after dependencies are built
-        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, log, taskLog);
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, { log, taskLog, addTask, updateTask });
         if (!sourceResult.success) {
           log('Source generation failed, continuing anyway...');
         }
@@ -698,7 +718,7 @@ program
         logRaw('');
 
         // Run source generators for affected projects
-        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, log, taskLog);
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, { log, taskLog, addTask, updateTask });
         if (!sourceResult.success) {
           log('Source generation failed');
           setStatus(`build #${buildCount} FAILED`);
@@ -722,7 +742,7 @@ program
             onComplete: (buildResult) => {
               const status = buildResult.success ? 'done' : 'FAILED';
               log(`${buildResult.project}: ${status} (${buildResult.duration}ms)`);
-              updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error');
+              updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error', 2000);
             },
           });
 
