@@ -1,3 +1,5 @@
+export type PackageManager = 'npm' | 'yarn' | 'pnpm' | 'bun';
+
 // PackageJson mirrors external npm package.json structure
 // All fields are required with empty defaults - normalize when parsing
 export interface PackageJson {

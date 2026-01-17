@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { glob } from 'glob';
-import { PackageJson, Project } from './types';
+import { PackageJson, PackageManager, Project } from './types';
 
 interface RawPackageJson {
   name: string;
@@ -30,6 +30,32 @@ function normalizePackageJson(raw: Partial<RawPackageJson>): PackageJson {
     optionalDependencies: raw.optionalDependencies !== undefined ? raw.optionalDependencies : EMPTY_RECORD,
     scripts: raw.scripts !== undefined ? raw.scripts : EMPTY_RECORD,
   };
+}
+
+export function detectPackageManager(root: string): PackageManager {
+  // Check packageManager field in package.json first (highest priority)
+  const pkgJsonPath = path.join(root, 'package.json');
+  if (fs.existsSync(pkgJsonPath)) {
+    const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8')) as Record<string, unknown>;
+    if (typeof pkgJson['packageManager'] === 'string') {
+      const pm = pkgJson['packageManager'].split('@')[0];
+      if (pm === 'bun' || pm === 'pnpm' || pm === 'yarn' || pm === 'npm') {
+        return pm;
+      }
+    }
+  }
+
+  // Fall back to lockfile detection
+  if (fs.existsSync(path.join(root, 'bun.lockb')) || fs.existsSync(path.join(root, 'bun.lock'))) {
+    return 'bun';
+  }
+  if (fs.existsSync(path.join(root, 'pnpm-lock.yaml'))) {
+    return 'pnpm';
+  }
+  if (fs.existsSync(path.join(root, 'yarn.lock'))) {
+    return 'yarn';
+  }
+  return 'npm';
 }
 
 export async function loadWorkspaceProjects(root: string): Promise<Map<string, Project>> {

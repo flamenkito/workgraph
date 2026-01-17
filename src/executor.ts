@@ -1,9 +1,29 @@
 import { spawn } from 'child_process';
 import * as os from 'os';
-import { BuildResult, BuildStepInfo, ExecutorOptions, Project, ProjectBuildResult } from './types';
+import { BuildResult, BuildStepInfo, ExecutorOptions, PackageManager, Project, ProjectBuildResult } from './types';
+import { detectPackageManager } from './workspace';
 
 const DEFAULT_CONCURRENCY = Math.max(1, os.cpus().length - 1);
 
+const buildCommands: Record<PackageManager, (name: string) => string> = {
+  npm: (name) => `npm run build -w ${name}`,
+  yarn: (name) => `yarn workspace ${name} run build`,
+  pnpm: (name) => `pnpm --filter ${name} run build`,
+  bun: (name) => `bun run --filter ${name} build`,
+};
+
+export function createBuildCommand(root: string): (project: Project) => string {
+  const pm = detectPackageManager(root);
+  return (project: Project): string => {
+    const scripts = project.packageJson.scripts;
+    if (scripts['build']) {
+      return buildCommands[pm](project.name);
+    }
+    return `echo "No build script for ${project.name}"`;
+  };
+}
+
+/** @deprecated Use createBuildCommand(root) instead */
 export function defaultBuildCommand(project: Project): string {
   const scripts = project.packageJson.scripts;
   if (scripts['build']) {
@@ -107,7 +127,7 @@ export async function executePlan(
   options: Partial<ExecutorOptions> = {}
 ): Promise<BuildResult> {
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-  const buildCommand = options.buildCommand ?? defaultBuildCommand;
+  const buildCommand = options.buildCommand ?? createBuildCommand(root);
   const dryRun = options.dryRun ?? false;
   const onStart = options.onStart ?? noop;
   const onComplete = options.onComplete ?? noop;

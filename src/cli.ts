@@ -3,13 +3,13 @@
 import { Command } from 'commander';
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
-import { loadWorkspaceProjects } from './workspace';
+import { detectPackageManager, loadWorkspaceProjects } from './workspace';
 import { buildGraph, detectCycles, formatGraph } from './graph';
 import { getAffectedProjects, resolveProjectNames } from './affected';
 import { createBuildPlan, formatBuildPlan } from './planner';
 import { createWatcher, formatTimestamp } from './watcher';
 import { executePlan } from './executor';
-import { Project, SourceConfig } from './types';
+import { PackageManager, Project, SourceConfig } from './types';
 import {
   scanForUnknownDependencies,
   formatUnknownDependencies,
@@ -46,6 +46,13 @@ interface WatchCommandOptions {
   verbose: boolean;
   ui: boolean;
 }
+
+const devCommands: Record<PackageManager, { cmd: string; args: (name: string) => string[] }> = {
+  npm: { cmd: 'npm', args: (name) => ['run', 'dev', '-w', name] },
+  yarn: { cmd: 'yarn', args: (name) => ['workspace', name, 'run', 'dev'] },
+  pnpm: { cmd: 'pnpm', args: (name) => ['--filter', name, 'run', 'dev'] },
+  bun: { cmd: 'bun', args: (name) => ['run', '--filter', name, 'dev'] },
+};
 
 function normalizeSourceConfig(config: string | SourceConfig): SourceConfig {
   if (typeof config === 'string') {
@@ -559,6 +566,9 @@ program
           log('Source generation failed, continuing anyway...');
         }
 
+        const pm = detectPackageManager(root);
+        const pmDev = devCommands[pm];
+
         for (const appName of resolvedApps) {
           const project = projects.get(appName);
           if (!project) continue;
@@ -569,12 +579,11 @@ program
             continue;
           }
 
-          const devCmd = `npm run dev -w ${appName}`;
+          const devCmd = `${pmDev.cmd} ${pmDev.args(appName).join(' ')}`;
           log(`Starting dev server: ${appName}`);
           taskLog(`\x1b[33m$ ${devCmd}\x1b[0m`);
 
-          // eslint-disable-next-line sonarjs/no-os-command-from-path -- build tool: npm must be resolved from PATH
-          const proc = spawn('npm', ['run', 'dev', '-w', appName], {
+          const proc = spawn(pmDev.cmd, pmDev.args(appName), {
             cwd: root,
             stdio: ['ignore', 'pipe', 'pipe'],
             detached: true,  // Create process group for proper cleanup
