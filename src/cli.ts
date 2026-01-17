@@ -98,7 +98,7 @@ interface SourceGeneratorCallbacks {
   log: (msg: string) => void;
   taskLog: (msg: string) => void;
   addTask: (task: { id: string; name: string; pid: number; status: 'running' | 'stopped' | 'error' }) => void;
-  updateTask: (id: string, status: 'running' | 'stopped' | 'error', removeAfterMs?: number) => void;
+  updateTask: (id: string, status: 'running' | 'stopped' | 'error') => void;
 }
 
 async function runSourceGeneratorsWithUI(
@@ -165,12 +165,12 @@ async function runSourceGeneratorsWithUI(
         });
 
         proc.on('close', (code) => {
-          updateTask(taskId, code === 0 ? 'stopped' : 'error', 2000);
+          updateTask(taskId, code === 0 ? 'stopped' : 'error');
           resolve({ success: code === 0, output });
         });
 
         proc.on('error', (err) => {
-          updateTask(taskId, 'error', 2000);
+          updateTask(taskId, 'error');
           resolve({ success: false, output: err.message });
         });
       });
@@ -533,7 +533,7 @@ program
               onComplete: (buildResult) => {
                 const status = buildResult.success ? 'done' : 'FAILED';
                 log(`${buildResult.project}: ${status} (${buildResult.duration}ms)`);
-                updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error', 2000);
+                updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error');
                 if (!buildResult.success && buildResult.error) {
                   taskLog(buildResult.error);
                 }
@@ -742,7 +742,7 @@ program
             onComplete: (buildResult) => {
               const status = buildResult.success ? 'done' : 'FAILED';
               log(`${buildResult.project}: ${status} (${buildResult.duration}ms)`);
-              updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error', 2000);
+              updateTask(`build-${buildResult.project}`, buildResult.success ? 'stopped' : 'error');
             },
           });
 

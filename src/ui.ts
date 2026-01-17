@@ -5,6 +5,8 @@ export interface RunningTask {
   name: string;
   pid: number;
   status: 'running' | 'stopped' | 'error';
+  startTime: number;
+  endTime: number;
 }
 
 export interface UI {
@@ -15,8 +17,8 @@ export interface UI {
   log: (message: string) => void;
   taskLog: (message: string) => void;
   setStatus: (status: string | null) => void;
-  addTask: (task: RunningTask) => void;
-  updateTask: (id: string, status: RunningTask['status'], removeAfterMs?: number) => void;
+  addTask: (task: Omit<RunningTask, 'startTime' | 'endTime'>) => void;
+  updateTask: (id: string, status: RunningTask['status']) => void;
   removeTask: (id: string) => void;
   destroy: () => void;
 }
@@ -48,8 +50,23 @@ export function createUI(): UI {
   const tasks: Map<string, RunningTask> = new Map();
 
   const renderTasks = (): void => {
+    const taskList = [...tasks.values()];
+
+    // Sort: running tasks on top (by startTime desc - longer running higher),
+    // then stopped/error tasks (by endTime desc - more recent higher)
+    taskList.sort((a, b) => {
+      if (a.status === 'running' && b.status !== 'running') return -1;
+      if (a.status !== 'running' && b.status === 'running') return 1;
+      if (a.status === 'running' && b.status === 'running') {
+        // Both running: longer running (earlier start) goes higher
+        return a.startTime - b.startTime;
+      }
+      // Both stopped/error: more recently quit goes higher
+      return b.endTime - a.endTime;
+    });
+
     const lines: string[] = [];
-    for (const task of tasks.values()) {
+    for (const task of taskList) {
       let statusIcon: string;
       let statusColor: string;
       switch (task.status) {
@@ -66,7 +83,7 @@ export function createUI(): UI {
           statusColor = 'red';
           break;
       }
-      const pidStr = task.pid > 0 ? ` {gray-fg}${task.pid}{/}` : '';
+      const pidStr = task.status === 'running' && task.pid > 0 ? ` {gray-fg}${task.pid}{/}` : '';
       lines.push(`{${statusColor}-fg}${statusIcon}{/} ${task.name}${pidStr}`);
     }
     tasksPane.setContent(lines.join('\n'));
@@ -178,21 +195,19 @@ export function createUI(): UI {
     screen.destroy();
   };
 
-  const addTask = (task: RunningTask): void => {
-    tasks.set(task.id, task);
+  const addTask = (task: Omit<RunningTask, 'startTime' | 'endTime'>): void => {
+    tasks.set(task.id, { ...task, startTime: Date.now(), endTime: 0 });
     renderTasks();
   };
 
-  const updateTask = (id: string, status: RunningTask['status'], removeAfterMs?: number): void => {
+  const updateTask = (id: string, status: RunningTask['status']): void => {
     const task = tasks.get(id);
     if (task) {
       task.status = status;
-      renderTasks();
-      if (removeAfterMs !== undefined && removeAfterMs > 0) {
-        setTimeout(() => {
-          removeTask(id);
-        }, removeAfterMs);
+      if (status !== 'running') {
+        task.endTime = Date.now();
       }
+      renderTasks();
     }
   };
 
