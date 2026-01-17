@@ -7,6 +7,7 @@ export interface RunningTask {
   status: 'running' | 'stopped' | 'error';
   startTime: number;
   endTime: number;
+  port: number;
 }
 
 export interface UI {
@@ -17,8 +18,9 @@ export interface UI {
   log: (message: string) => void;
   taskLog: (message: string) => void;
   setStatus: (status: string | null) => void;
-  addTask: (task: Omit<RunningTask, 'startTime' | 'endTime'>) => void;
+  addTask: (task: Omit<RunningTask, 'startTime' | 'endTime' | 'port'>) => void;
   updateTask: (id: string, status: RunningTask['status']) => void;
+  updateTaskPort: (id: string, port: number) => void;
   removeTask: (id: string) => void;
   destroy: () => void;
 }
@@ -83,8 +85,8 @@ export function createUI(): UI {
           statusColor = 'red';
           break;
       }
-      const pidStr = task.status === 'running' && task.pid > 0 ? ` {gray-fg}${task.pid}{/}` : '';
-      lines.push(`{${statusColor}-fg}${statusIcon}{/} ${task.name}${pidStr}`);
+      const portStr = task.port > 0 ? ` {cyan-fg}:${task.port}{/}` : '';
+      lines.push(`{${statusColor}-fg}${statusIcon}{/} ${task.name}${portStr}`);
     }
     tasksPane.setContent(lines.join('\n'));
     screen.render();
@@ -195,9 +197,17 @@ export function createUI(): UI {
     screen.destroy();
   };
 
-  const addTask = (task: Omit<RunningTask, 'startTime' | 'endTime'>): void => {
-    tasks.set(task.id, { ...task, startTime: Date.now(), endTime: 0 });
+  const addTask = (task: Omit<RunningTask, 'startTime' | 'endTime' | 'port'>): void => {
+    tasks.set(task.id, { ...task, startTime: Date.now(), endTime: 0, port: 0 });
     renderTasks();
+  };
+
+  const updateTaskPort = (id: string, port: number): void => {
+    const task = tasks.get(id);
+    if (task && task.port === 0) {
+      task.port = port;
+      renderTasks();
+    }
   };
 
   const updateTask = (id: string, status: RunningTask['status']): void => {
@@ -226,9 +236,34 @@ export function createUI(): UI {
     setStatus,
     addTask,
     updateTask,
+    updateTaskPort,
     removeTask,
     destroy,
   };
+}
+
+// Detect port number from output line
+// Matches common patterns like:
+// - "listening on port 3000"
+// - "http://localhost:3000"
+// - "Server running at http://127.0.0.1:5173"
+// - "Local: http://localhost:4200/"
+export function detectPort(line: string): number {
+  // Pattern 1: "port 3000" or "port: 3000" or "port=3000"
+  const portPattern = /\bport[ :=]*(\d{2,5})\b/i;
+  const portMatch = portPattern.exec(line);
+  if (portMatch) {
+    return parseInt(portMatch[1]!, 10);
+  }
+
+  // Pattern 2: URLs like "http://localhost:3000" or "http://127.0.0.1:5173"
+  const urlPattern = /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):(\d{2,5})/i;
+  const urlMatch = urlPattern.exec(line);
+  if (urlMatch) {
+    return parseInt(urlMatch[1]!, 10);
+  }
+
+  return 0;
 }
 
 // Convert ANSI escape codes to blessed tags

@@ -15,7 +15,7 @@ import {
   formatUnknownDependencies,
   loadWorkgraphConfig,
 } from './source-scanner';
-import { createUI } from './ui';
+import { createUI, detectPort } from './ui';
 
 interface AnalyzeCommandOptions {
   root: string;
@@ -440,6 +440,7 @@ program
       const setStatus = ui ? ui.setStatus : () => {};
       const addTask = ui ? ui.addTask : () => {};
       const updateTask = ui ? ui.updateTask : () => {};
+      const updateTaskPort = ui ? ui.updateTaskPort : () => {};
 
       // Start dev servers for specified apps
       const devProcesses: { proc: ChildProcess; name: string; command: string }[] = [];
@@ -597,14 +598,26 @@ program
           proc.stdout?.on('data', (data: Buffer) => {
             const lines = stripClearCodes(data.toString()).trim().split('\n');
             for (const line of lines) {
-              if (line) taskLog(`${prefix} ${line}`);
+              if (line) {
+                taskLog(`${prefix} ${line}`);
+                const port = detectPort(line);
+                if (port > 0) {
+                  updateTaskPort(taskId, port);
+                }
+              }
             }
           });
 
           proc.stderr?.on('data', (data: Buffer) => {
             const lines = stripClearCodes(data.toString()).trim().split('\n');
             for (const line of lines) {
-              if (line) taskLog(`${prefix} ${line}`);
+              if (line) {
+                taskLog(`${prefix} ${line}`);
+                const port = detectPort(line);
+                if (port > 0) {
+                  updateTaskPort(taskId, port);
+                }
+              }
             }
           });
 
