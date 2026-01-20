@@ -108,6 +108,9 @@ export interface UnknownDependency {
 export interface SourceConfig {
   command: string;
   deps: string[];
+  cwd?: string;
+  /** Project name that depends on this generator's output. Generator runs before building this project. */
+  target?: string;
 }
 
 export interface WorkgraphConfig {

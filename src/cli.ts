@@ -62,39 +62,31 @@ function normalizeSourceConfig(config: string | SourceConfig): SourceConfig {
 }
 
 function shouldRunGenerator(
-  sourcePath: string,
+  _sourcePath: string,
   sourceConfig: SourceConfig,
   affectedProjects: Set<string>,
   projects: Map<string, Project>,
-  root: string
+  _root: string
 ): boolean {
-  // Check if any dep project is affected
-  if (sourceConfig.deps.length > 0) {
-    for (const dep of sourceConfig.deps) {
-      // Try exact match first
-      if (affectedProjects.has(dep)) {
-        return true;
-      }
-      // Try matching by path or partial name
-      for (const projectName of affectedProjects) {
-        const project = projects.get(projectName);
-        if (!project) continue;
-        // Match by path (e.g., "apps/api" or "api")
-        if (project.path === dep || project.path.endsWith('/' + dep)) {
-          return true;
-        }
-      }
-    }
-    return false;
+  // Empty deps means no dependencies - always run
+  if (sourceConfig.deps.length === 0) {
+    return true;
   }
 
-  // Fallback: check if source path is within any affected project
-  const sourceDir = path.resolve(root, sourcePath);
-  for (const projectName of affectedProjects) {
-    const project = projects.get(projectName);
-    if (!project) continue;
-    if (sourceDir.startsWith(project.absolutePath)) {
+  // Check if any dep project is affected
+  for (const dep of sourceConfig.deps) {
+    // Try exact match first
+    if (affectedProjects.has(dep)) {
       return true;
+    }
+    // Try matching by path or partial name
+    for (const projectName of affectedProjects) {
+      const project = projects.get(projectName);
+      if (!project) continue;
+      // Match by path (e.g., "apps/api" or "api")
+      if (project.path === dep || project.path.endsWith('/' + dep)) {
+        return true;
+      }
     }
   }
 
@@ -108,6 +100,127 @@ interface SourceGeneratorCallbacks {
   updateTask: (id: string, status: 'running' | 'stopped' | 'error') => void;
 }
 
+// Topologically sort sources by their dependencies
+function sortSourcesByDeps(
+  sources: Record<string, string | SourceConfig>,
+): [string, SourceConfig][] {
+  const normalized = new Map<string, SourceConfig>();
+  for (const [key, value] of Object.entries(sources)) {
+    normalized.set(key, normalizeSourceConfig(value));
+  }
+
+  const sorted: [string, SourceConfig][] = [];
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+
+  const visit = (name: string): void => {
+    if (visited.has(name)) return;
+    if (visiting.has(name)) return; // Cycle - skip
+
+    const config = normalized.get(name);
+    if (!config) return;
+
+    visiting.add(name);
+
+    // Visit dependencies first
+    for (const dep of config.deps) {
+      if (normalized.has(dep)) {
+        visit(dep);
+      }
+    }
+
+    visiting.delete(name);
+    visited.add(name);
+    sorted.push([name, config]);
+  };
+
+  for (const name of normalized.keys()) {
+    visit(name);
+  }
+
+  return sorted;
+}
+
+async function runSingleGenerator(
+  sourcePath: string,
+  sourceConfig: SourceConfig,
+  root: string,
+  dryRun: boolean,
+  callbacks: SourceGeneratorCallbacks,
+): Promise<{ success: boolean; output: string }> {
+  const { log, taskLog, addTask, updateTask } = callbacks;
+  const taskId = `gen-${sourcePath}`;
+
+  log(`Generating: ${sourcePath}`);
+  taskLog(`\x1b[33m$ ${sourceConfig.command}\x1b[0m`);
+
+  if (dryRun) {
+    return { success: true, output: '[dry-run]' };
+  }
+
+  try {
+    const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
+      // eslint-disable-next-line sonarjs/os-command -- build tool: runs user-configured source generators
+      const proc = spawn(sourceConfig.command, {
+        cwd: sourceConfig.cwd ?? root,
+        shell: true,
+        stdio: 'pipe',
+      });
+
+      if (proc.pid) {
+        addTask({ id: taskId, name: `gen:${sourcePath}`, pid: proc.pid, status: 'running' });
+      }
+
+      let output = '';
+      proc.stdout?.on('data', (data: Buffer) => {
+        const text = data.toString();
+        output += text;
+        text.split('\n').forEach((line: string) => {
+          if (line.trim()) taskLog(line);
+        });
+      });
+      proc.stderr?.on('data', (data: Buffer) => {
+        const text = data.toString();
+        output += text;
+        text.split('\n').forEach((line: string) => {
+          if (line.trim()) taskLog(line);
+        });
+      });
+
+      proc.on('close', (code) => {
+        updateTask(taskId, code === 0 ? 'stopped' : 'error');
+        resolve({ success: code === 0, output });
+      });
+
+      proc.on('error', (err) => {
+        updateTask(taskId, 'error');
+        resolve({ success: false, output: err.message });
+      });
+    });
+
+    if (result.success) {
+      log('Generated successfully');
+    } else {
+      log('Generation FAILED');
+    }
+    return result;
+  } catch (error) {
+    log(`Generation FAILED: ${(error as Error).message}`);
+    return { success: false, output: (error as Error).message };
+  }
+}
+
+/** Get generators that target specific projects */
+function getGeneratorsForTargets(
+  sources: [string, SourceConfig][],
+  targetProjects: Set<string>,
+): [string, SourceConfig][] {
+  return sources.filter(([, config]) => {
+    if (!config.target) return false;
+    return targetProjects.has(config.target);
+  });
+}
+
 async function runSourceGeneratorsWithUI(
   root: string,
   affectedProjects: Set<string>,
@@ -118,79 +231,29 @@ async function runSourceGeneratorsWithUI(
     taskLog: console.log,
     addTask: () => {},
     updateTask: () => {},
-  }
+  },
+  /** Skip generators that target specific projects (already run before build) */
+  skipTargets?: Set<string>,
 ): Promise<{ success: boolean; generated: string[] }> {
-  const { log, taskLog, addTask, updateTask } = callbacks;
-  const config = loadWorkgraphConfig(root);
-  const sources = config.sources;
+  const config = loadWorkgraphConfig(root, projects);
+  const sortedSources = sortSourcesByDeps(config.sources);
   const generated: string[] = [];
 
-  for (const [sourcePath, rawConfig] of Object.entries(sources)) {
-    const sourceConfig = normalizeSourceConfig(rawConfig);
+  for (const [sourcePath, sourceConfig] of sortedSources) {
+    // Skip if this generator targets a project we've already handled
+    if (skipTargets && sourceConfig.target && skipTargets.has(sourceConfig.target)) {
+      continue;
+    }
 
     if (!shouldRunGenerator(sourcePath, sourceConfig, affectedProjects, projects, root)) {
       continue;
     }
 
-    const taskId = `gen-${sourcePath}`;
+    const result = await runSingleGenerator(sourcePath, sourceConfig, root, dryRun, callbacks);
 
-    log(`Generating: ${sourcePath}`);
-    taskLog(`\x1b[33m$ ${sourceConfig.command}\x1b[0m`);
-
-    if (dryRun) {
+    if (result.success) {
       generated.push(sourcePath);
-      continue;
-    }
-
-    try {
-      const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
-        // eslint-disable-next-line sonarjs/os-command -- build tool: runs user-configured source generators
-        const proc = spawn(sourceConfig.command, {
-          cwd: root,
-          shell: true,
-          stdio: 'pipe',
-        });
-
-        if (proc.pid) {
-          addTask({ id: taskId, name: `gen:${sourcePath}`, pid: proc.pid, status: 'running' });
-        }
-
-        let output = '';
-        proc.stdout?.on('data', (data: Buffer) => {
-          const text = data.toString();
-          output += text;
-          text.split('\n').forEach((line: string) => {
-            if (line.trim()) taskLog(line);
-          });
-        });
-        proc.stderr?.on('data', (data: Buffer) => {
-          const text = data.toString();
-          output += text;
-          text.split('\n').forEach((line: string) => {
-            if (line.trim()) taskLog(line);
-          });
-        });
-
-        proc.on('close', (code) => {
-          updateTask(taskId, code === 0 ? 'stopped' : 'error');
-          resolve({ success: code === 0, output });
-        });
-
-        proc.on('error', (err) => {
-          updateTask(taskId, 'error');
-          resolve({ success: false, output: err.message });
-        });
-      });
-
-      if (result.success) {
-        log('Generated successfully');
-        generated.push(sourcePath);
-      } else {
-        log('Generation FAILED');
-        return { success: false, generated };
-      }
-    } catch (error) {
-      log(`Generation FAILED: ${(error as Error).message}`);
+    } else {
       return { success: false, generated };
     }
   }
@@ -255,7 +318,7 @@ program
 
       if (result.configuredSources.size > 0) {
         console.log('Configured sources:');
-        const config = loadWorkgraphConfig(root);
+        const config = loadWorkgraphConfig(root, projects);
         for (const sourcePath of result.configuredSources) {
           const sourceConfig = config.sources[sourcePath];
           if (!sourceConfig) continue;
@@ -522,19 +585,38 @@ program
           }
         }
 
-        // Build dependencies first (source generators may need them)
+        // Build dependencies first, running targeted generators before their targets
+        const generatorsAlreadyRun = new Set<string>();
+
         if (depsToBuilt.size > 0) {
           log(`Building ${depsToBuilt.size} dependencies first...`);
 
-          // Build dependencies
           const plan = createBuildPlan(depsToBuilt, graph.deps);
-          if (plan.waves.length > 0) {
-            const result = await executePlan(plan.waves, projects, root, {
+          const config = loadWorkgraphConfig(root, projects);
+          const sortedSources = sortSourcesByDeps(config.sources);
+
+          // Build wave by wave, running targeted generators before each wave
+          for (let waveIndex = 0; waveIndex < plan.waves.length; waveIndex++) {
+            const wave = plan.waves[waveIndex]!;
+            const waveProjects = new Set(wave);
+
+            // Run generators that target projects in this wave
+            const targetedGenerators = getGeneratorsForTargets(sortedSources, waveProjects);
+            for (const [sourcePath, sourceConfig] of targetedGenerators) {
+              const result = await runSingleGenerator(sourcePath, sourceConfig, root, options.dryRun, { log, taskLog, addTask, updateTask });
+              generatorsAlreadyRun.add(sourceConfig.target!);
+              if (!result.success) {
+                log(`Generator for ${sourceConfig.target} failed, continuing anyway...`);
+              }
+            }
+
+            // Build this wave
+            const waveResult = await executePlan([wave], projects, root, {
               concurrency: parseInt(options.concurrency, 10),
               dryRun: options.dryRun,
               onStart: (info) => {
                 const mode = info.isParallel ? 'parallel' : 'sequential';
-                log(`Building: ${info.project} (wave ${info.wave}/${info.totalWaves} ${mode}, step ${info.step}/${info.totalSteps})`);
+                log(`Building: ${info.project} (wave ${waveIndex + 1}/${plan.waves.length} ${mode}, step ${info.step}/${wave.length})`);
                 const shortName = info.project.includes('/') ? info.project.split('/').pop() : info.project;
                 addTask({ id: `build-${info.project}`, name: `build:${shortName}`, pid: 0, status: 'running' });
               },
@@ -549,19 +631,19 @@ program
               onOutput: taskLog,
             });
 
-            if (result.success) {
-              log('Dependencies built successfully');
-            } else {
+            if (!waveResult.success) {
               log('Dependency build had errors, continuing anyway...');
             }
           }
+
+          log('Dependencies built successfully');
         }
 
         // Include apps themselves for source generation
         const affected = new Set([...resolvedApps, ...depsToBuilt]);
 
-        // Run source generators after dependencies are built
-        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, { log, taskLog, addTask, updateTask });
+        // Run remaining source generators (skip those with targets already run)
+        const sourceResult = await runSourceGeneratorsWithUI(root, affected, projects, options.dryRun, { log, taskLog, addTask, updateTask }, generatorsAlreadyRun);
         if (!sourceResult.success) {
           log('Source generation failed, continuing anyway...');
         }
@@ -790,7 +872,7 @@ program
       };
 
       // Get configured source paths to ignore (prevents infinite loop when generators write files)
-      const config = loadWorkgraphConfig(root);
+      const config = loadWorkgraphConfig(root, projects);
       const sourcePaths = Object.keys(config.sources).map(p => `**/${p}/**`);
 
       if (sourcePaths.length > 0) {

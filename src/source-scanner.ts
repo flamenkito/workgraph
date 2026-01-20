@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { glob } from 'glob';
-import { Project, UnknownDependency, WorkgraphConfig } from './types';
+import { Project, SourceConfig, UnknownDependency, WorkgraphConfig } from './types';
 
 // Match import/export statements - simplified pattern to avoid backtracking
 // Matches: import 'x', import x from 'x', import {x} from 'x', export * from 'x', etc.
@@ -127,6 +127,7 @@ function pathExists(p: string): boolean {
 interface RawSourceConfig {
   command: string;
   deps: string[];
+  target?: string;
 }
 
 interface RawWorkgraphConfig {
@@ -136,40 +137,82 @@ interface RawWorkgraphConfig {
 // Default for empty deps array (external API)
 const EMPTY_DEPS: string[] = [];
 
-export function loadWorkgraphConfig(root: string): WorkgraphConfig {
-  const pkgPath = path.join(root, 'package.json');
-  const emptyConfig: WorkgraphConfig = { sources: {} };
+const normalizeSourceConfig = (
+  value: string | Partial<RawSourceConfig>,
+  cwd?: string,
+  /** Project name that contains this source config - auto-set as target */
+  projectName?: string,
+): SourceConfig => {
+  if (typeof value === 'string') {
+    const config: SourceConfig = { command: value, deps: EMPTY_DEPS };
+    if (cwd) config.cwd = cwd;
+    if (projectName) config.target = projectName;
+    return config;
+  }
 
+  const base: SourceConfig = {
+    command: value.command ?? '',
+    deps: value.deps ?? EMPTY_DEPS,
+  };
+
+  if (cwd) base.cwd = cwd;
+  // Explicit target overrides auto-detected, otherwise use containing project
+  const target = value.target ?? projectName;
+  if (target) base.target = target;
+
+  return base;
+};
+
+const loadPackageWorkgraphConfig = (
+  pkgPath: string,
+  cwd?: string,
+  /** Project name for auto-targeting sources defined in this package */
+  projectName?: string,
+): Record<string, SourceConfig> => {
   if (!fs.existsSync(pkgPath)) {
-    return emptyConfig;
+    return {};
   }
 
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { workgraph: Partial<RawWorkgraphConfig> };
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+    workgraph?: Partial<RawWorkgraphConfig>;
+  };
   const workgraph = pkg.workgraph;
-  if (!workgraph) {
-    return emptyConfig;
+  if (!workgraph?.sources) {
+    return {};
   }
 
-  const rawSources = workgraph.sources;
-  if (!rawSources) {
-    return emptyConfig;
-  }
-
-  // Normalize source configs to have required deps array
-  const sources: Record<string, string | { command: string; deps: string[] }> = {};
-  for (const [key, value] of Object.entries(rawSources)) {
-    if (typeof value === 'string') {
-      sources[key] = value;
-    } else if (value) {
-      sources[key] = {
-        command: value.command !== undefined ? value.command : '',
-        deps: value.deps !== undefined ? value.deps : EMPTY_DEPS,
-      };
+  const sources: Record<string, SourceConfig> = {};
+  for (const [key, value] of Object.entries(workgraph.sources)) {
+    if (value) {
+      sources[key] = normalizeSourceConfig(value, cwd, projectName);
     }
   }
 
-  return { sources };
-}
+  return sources;
+};
+
+export const loadWorkgraphConfig = (
+  root: string,
+  projects?: Map<string, Project>,
+): WorkgraphConfig => {
+  // Load root config (no cwd - runs from root)
+  const rootSources = loadPackageWorkgraphConfig(path.join(root, 'package.json'));
+
+  // Load per-project configs (auto-target sources to their containing project)
+  const projectSources: Record<string, SourceConfig> = {};
+  if (projects) {
+    for (const [name, project] of projects) {
+      const pkgPath = path.join(project.absolutePath, 'package.json');
+      const sources = loadPackageWorkgraphConfig(pkgPath, project.absolutePath, name);
+      Object.assign(projectSources, sources);
+    }
+  }
+
+  // Merge: project-level sources override root sources
+  return {
+    sources: { ...rootSources, ...projectSources },
+  };
+};
 
 export function isPathInGitignore(filePath: string, root: string): boolean {
   const gitignorePath = path.join(root, '.gitignore');
@@ -204,7 +247,7 @@ export async function scanForUnknownDependencies(
   projects: Map<string, Project>,
   root: string
 ): Promise<ScanResult> {
-  const config = loadWorkgraphConfig(root);
+  const config = loadWorkgraphConfig(root, projects);
   const configuredSources = new Set<string>(Object.keys(config.sources));
   const unknownDependencies: UnknownDependency[] = [];
 

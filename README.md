@@ -215,32 +215,32 @@ Configure automatic source generation for generated code (e.g., client code from
 
 ### Configuration
 
-Add `workgraph.sources` to your root `package.json`:
+Add `workgraph.sources` to root or any project's `package.json`. Per-project configs automatically run from the project directory and target that project.
 
+**Per-project config** (recommended) - in `apps/api/package.json`:
 ```json
 {
   "workgraph": {
     "sources": {
-      "apps/web-angular/src/generated": {
-        "command": "npx exposify-codegen api --output ./apps/web-angular/src/generated --target angular",
-        "deps": ["api"]
-      },
-      "apps/web-preact/src/generated": {
-        "command": "npx exposify-codegen api --output ./apps/web-preact/src/generated --target preact",
-        "deps": ["api"]
+      "api": {
+        "command": "bun run codegen --output src/generated",
+        "deps": []
       }
     }
   }
 }
 ```
 
-You can also use the shorthand string format for simple generators:
-
+**Root config** - in root `package.json`:
 ```json
 {
   "workgraph": {
     "sources": {
-      "libs/types/src/generated": "npx generate-types"
+      "web-client": {
+        "command": "npx exposify-codegen api --output ./apps/web/src/generated",
+        "deps": ["api"],
+        "target": "@myorg/web"
+      }
     }
   }
 }
@@ -250,37 +250,59 @@ You can also use the shorthand string format for simple generators:
 
 | Field | Description |
 |-------|-------------|
-| `command` | The shell command to run for generation |
-| `deps` | Array of project names/paths that trigger this generator when changed |
+| `command` | Shell command to run (or use string shorthand) |
+| `deps` | Source generators that must run first. Empty = no dependencies. |
+| `cwd` | Working directory (auto-set for per-project configs) |
+| `target` | Project that depends on this generator's output (auto-set for per-project configs) |
 
 ### How It Works
 
-1. When `build` or `watch` runs, workgraph checks if any affected project matches a generator's `deps`
-2. If so, the source generation command runs **before** the build
-3. This ensures generated code is up-to-date before compilation
+1. **Auto-targeting**: Sources in a project's `package.json` automatically target that project
+2. **Build ordering**: Generators run **before** their target project builds
+3. **Topological sort**: Generators are sorted by `deps` - dependencies run first
+
+### Example: API with Generated Code
+
+If `@myorg/api` imports from `src/generated/`, define the generator in `apps/api/package.json`:
+
+```json
+{
+  "name": "@myorg/api",
+  "workgraph": {
+    "sources": {
+      "api-types": {
+        "command": "bun run generate-types",
+        "deps": []
+      }
+    }
+  }
+}
+```
+
+Build order:
+1. Build libs (`@myorg/utils`, `@myorg/auth`)
+2. **Generate `api-types`** ← runs before api build
+3. Build `@myorg/api` ← succeeds because generated code exists
 
 ### Example Output
 
 ```
-$ workgraph build -c @myorg/api
+$ workgraph watch api web --no-ui
 
-Affected: @myorg/api, @myorg/web-angular
-
-Build Plan:
-  Wave 1: @myorg/api
-  Wave 2: @myorg/web-angular
-
-Total: 2 projects in 2 waves
-
-[14:32:01] Generating: apps/web-angular/src/generated
-[14:32:03]   Generated successfully
-
-[14:32:03] Building: @myorg/api
-[14:32:05] @myorg/api: done (2188ms)
-[14:32:05] Building: @myorg/web-angular
-[14:32:08] @myorg/web-angular: done (2580ms)
-
-Build complete in 4770ms
+[14:32:01] Building 3 dependencies first...
+[14:32:01] Building: @myorg/utils (wave 1/3)
+[14:32:02] @myorg/utils: done (850ms)
+[14:32:02] Building: @myorg/auth (wave 2/3)
+[14:32:03] @myorg/auth: done (550ms)
+[14:32:03] Generating: api-types
+[14:32:03] Generated successfully
+[14:32:03] Building: @myorg/api (wave 3/3)
+[14:32:05] @myorg/api: done (1400ms)
+[14:32:05] Dependencies built successfully
+[14:32:05] Generating: web-client
+[14:32:06] Generated successfully
+[14:32:06] Starting dev server: @myorg/api
+[14:32:06] Starting dev server: @myorg/web
 ```
 
 ## Programmatic API
